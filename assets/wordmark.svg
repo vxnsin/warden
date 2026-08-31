@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 64" width="320" height="64" role="img" aria-labelledby="title">
+  <title id="title">Port Manager</title>
+  <rect x="6.5" y="6.5" width="51" height="51" rx="15" fill="none" stroke="#2f6fed" stroke-width="5"/>
+  <rect x="20" y="21" width="8" height="22" rx="4" fill="#2f6fed"/>
+  <rect x="36" y="21" width="8" height="22" rx="4" fill="#2f6fed" opacity="0.35"/>
+  <text x="78" y="41" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="26" letter-spacing="-0.5">
+    <tspan fill="#2f6fed" font-weight="700">port</tspan><tspan fill="#8a93a6">-manager</tspan>
+  </text>
+</svg>
