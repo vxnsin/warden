@@ -6,6 +6,7 @@ amethyst and shrieker amber for telling one kind of service from another.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from itertools import groupby
 
 from rich.text import Text
@@ -67,6 +68,25 @@ TAGLINE = "nothing binds a port without asking"
 
 def kind_colour(kind: str) -> str:
     return KIND_COLOURS.get(kind, BONE_DIM)
+
+
+def age(moment: datetime) -> str:
+    """How long ago, in the largest unit that still says something."""
+    seconds = int((datetime.now(UTC) - moment).total_seconds())
+    if seconds < 60:
+        return f"{seconds}s ago"
+    if seconds < 3600:
+        return f"{seconds // 60}m ago"
+    if seconds < 86_400:
+        return f"{seconds // 3600}h ago"
+    return f"{seconds // 86_400}d ago"
+
+
+def account(user: str | None) -> str:
+    """Just the account, without the domain that pads every Windows row."""
+    if not user:
+        return "-"
+    return user.rsplit("\\", 1)[-1]
 
 
 def _block_for(encoding: str | None) -> str:

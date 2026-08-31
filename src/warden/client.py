@@ -16,7 +16,7 @@ from warden.errors import (
     UnknownServiceError,
     WardenError,
 )
-from warden.models import Listener, PoolStatus, Registration
+from warden.models import Listener, Node, PoolStatus, Registration
 
 _STATUS_ERRORS: dict[int, type[WardenError]] = {
     403: NotPermittedError,
@@ -128,6 +128,25 @@ class WardenClient:
 
     def stop(self, pid: int, *, force: bool = False) -> None:
         self._request("DELETE", f"/v1/listeners/{pid}", params={"force": force})
+
+    def nodes(self) -> list[Node]:
+        """Every warden this one knows about."""
+        return [Node.model_validate(item) for item in self._request("GET", "/v1/nodes")]
+
+    def announce(
+        self, name: str, *, url: str, pool_start: int, pool_end: int, version: str
+    ) -> Node:
+        payload = {
+            "name": name,
+            "url": url,
+            "pool_start": pool_start,
+            "pool_end": pool_end,
+            "version": version,
+        }
+        return Node.model_validate(self._request("POST", "/v1/nodes", json=payload))
+
+    def forget(self, name: str) -> None:
+        self._request("DELETE", f"/v1/nodes/{name}")
 
     @contextmanager
     def session(self, name: str, **kwargs: Any) -> Iterator[Registration]:

@@ -103,17 +103,6 @@ Confirm { align: center middle; }
 """
 
 
-def _age(moment: datetime) -> str:
-    seconds = int((datetime.now(UTC) - moment).total_seconds())
-    if seconds < 60:
-        return f"{seconds}s ago"
-    if seconds < 3600:
-        return f"{seconds // 60}m ago"
-    if seconds < 86_400:
-        return f"{seconds // 3600}h ago"
-    return f"{seconds // 86_400}d ago"
-
-
 def _lease(moment: datetime | None) -> Text:
     if moment is None:
         return Text("none", style=theme.BONE_DIM)
@@ -130,12 +119,6 @@ def _address(registration: Registration) -> Text:
     text.append(str(registration.port), style=theme.GLOW)
     return text
 
-
-def _account(user: str | None) -> str:
-    """Just the account, without the domain that pads every Windows row."""
-    if not user:
-        return "-"
-    return user.rsplit("\\", 1)[-1]
 
 
 def _dim(value: object) -> Text:
@@ -324,7 +307,7 @@ class WardenApp(App[None]):
                 _address(service),
                 _dim(service.pid),
                 _lease(service.expires_at),
-                _dim(_age(service.updated_at)),
+                _dim(theme.age(service.updated_at)),
             )
         self._restore_cursor(table, row, len(services))
 
@@ -353,7 +336,7 @@ class WardenApp(App[None]):
                 _dim(listener.protocol),
                 listener.process or Text("unknown", style=theme.BONE_DIM),
                 _dim(listener.pid),
-                _dim(_account(listener.user)),
+                _dim(theme.account(listener.user)),
                 _dim(listener.host),
                 Text(known.get((listener.host, listener.port), "-"), style=theme.MOSS),
             )

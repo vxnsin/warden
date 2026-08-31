@@ -11,9 +11,7 @@ from warden.tui import (
     PORTS,
     SERVICES,
     WardenApp,
-    _account,
     _address,
-    _age,
     _lease,
 )
 
@@ -75,10 +73,10 @@ def run_app(scenario, size=(120, 40)) -> None:
 
 def test_ages_are_shown_in_the_largest_useful_unit():
     now = datetime.now(UTC)
-    assert _age(now - timedelta(seconds=5)).endswith("s ago")
-    assert _age(now - timedelta(minutes=5)) == "5m ago"
-    assert _age(now - timedelta(hours=5)) == "5h ago"
-    assert _age(now - timedelta(days=5)) == "5d ago"
+    assert theme.age(now - timedelta(seconds=5)).endswith("s ago")
+    assert theme.age(now - timedelta(minutes=5)) == "5m ago"
+    assert theme.age(now - timedelta(hours=5)) == "5h ago"
+    assert theme.age(now - timedelta(days=5)) == "5d ago"
 
 
 def test_a_registration_without_a_lease_says_so_quietly():
@@ -106,10 +104,10 @@ def test_the_port_is_the_lit_part_of_an_address():
 
 
 def test_the_windows_domain_is_stripped_from_an_account():
-    assert _account("NT AUTHORITY\\SYSTEM") == "SYSTEM"
-    assert _account("WORKSTATION\\dev") == "dev"
-    assert _account("dev") == "dev"
-    assert _account(None) == "-"
+    assert theme.account("NT AUTHORITY\\SYSTEM") == "SYSTEM"
+    assert theme.account("WORKSTATION\\dev") == "dev"
+    assert theme.account("dev") == "dev"
+    assert theme.account(None) == "-"
 
 
 def test_every_registration_gets_a_row():

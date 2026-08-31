@@ -235,11 +235,6 @@ def register(
         console.print(service.port)
 
 
-def _account(user: str | None) -> str:
-    """Just the account, without the domain that pads every Windows row."""
-    if not user:
-        return "-"
-    return user.rsplit("\\", 1)[-1]
 
 
 def _registered_names(url: str | None, token: str | None) -> dict[tuple[str, int], str]:
@@ -289,7 +284,7 @@ def ports(
             Text(row.protocol, style=theme.BONE_DIM),
             row.process or Text("unknown", style=theme.BONE_DIM),
             Text(str(row.pid) if row.pid else "-", style=theme.BONE_DIM),
-            Text(_account(row.user), style=theme.BONE_DIM),
+            Text(theme.account(row.user), style=theme.BONE_DIM),
             Text(row.host, style=theme.BONE_DIM),
             Text(known.get((row.host, row.port), "-"), style=theme.MOSS),
         )
@@ -351,6 +346,50 @@ def release(name: str, url: UrlOption = None, token: TokenOption = None) -> None
         except WardenError as exc:
             raise _fail(exc) from exc
     console.print(f"released {name}")
+
+
+NODE_COLOURS = {"online": theme.MOSS, "stale": theme.SHRIEKER}
+
+
+@app.command()
+def nodes(
+    forget: Annotated[
+        str | None, typer.Option(help="Remove a warden that is not coming back.")
+    ] = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """List the wardens this one knows about."""
+    with _client(url, token) as client:
+        try:
+            if forget:
+                client.forget(forget)
+                console.print(f"forgot {forget}", style=theme.BONE_DIM)
+            known = client.nodes()
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+    if as_json:
+        _dump([node.model_dump(mode="json") for node in known])
+        return
+    if not known:
+        console.print("no other warden has reported in", style=theme.BONE_DIM)
+        return
+
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "URL", "POOL", "VERSION", "STATUS", "LAST SEEN"):
+        table.add_column(column)
+    for node in known:
+        table.add_row(
+            node.name,
+            Text(node.url, style=theme.BONE_DIM),
+            Text(node.pool, style=theme.GLOW),
+            Text(node.version, style=theme.BONE_DIM),
+            Text(node.status, style=NODE_COLOURS[node.status]),
+            Text(theme.age(node.last_seen), style=theme.BONE_DIM),
+        )
+    console.print(table)
 
 
 @app.command()
