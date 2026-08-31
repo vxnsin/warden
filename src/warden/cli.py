@@ -14,7 +14,7 @@ from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
 from warden.listeners import holder_of, listeners, stop
-from warden.models import Registration
+from warden.models import FleetRegistration, Registration
 
 app = typer.Typer(
     add_completion=False,
@@ -151,10 +151,29 @@ def tui(
     run(url, token=token, interval=interval)
 
 
+def _fleet_table(services: list[FleetRegistration]) -> Table:
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "SERVICE", "KIND", "PROJECT", "ADDRESS", "PID"):
+        table.add_column(column)
+    for service in services:
+        table.add_row(
+            service.node,
+            service.name,
+            Text(service.kind, style=theme.kind_colour(service.kind)),
+            Text(service.project or "-", style=theme.BONE_DIM),
+            _address(service),
+            Text(str(service.pid) if service.pid else "-", style=theme.BONE_DIM),
+        )
+    return table
+
+
 @app.command("ls")
 def list_services(
     project: Annotated[str | None, typer.Option(help="Only this project.")] = None,
     kind: Annotated[str | None, typer.Option(help="Only this kind of service.")] = None,
+    every: Annotated[
+        bool, typer.Option("--all", help="Ask every warden in the fleet, not just this one.")
+    ] = False,
     url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
@@ -162,15 +181,31 @@ def list_services(
     """List every registered service."""
     with _client(url, token) as client:
         try:
-            services = client.services(project=project, kind=kind)
+            fleet = (
+                client.fleet_services(project=project, kind=kind)
+                if every
+                else None
+            )
+            services = fleet.services if fleet else client.services(project=project, kind=kind)
         except WardenError as exc:
             raise _fail(exc) from exc
+
     if as_json:
-        _dump([service.model_dump(mode="json") for service in services])
-    elif services:
-        console.print(_table(services))
+        _dump(
+            fleet.model_dump(mode="json")
+            if fleet
+            else [service.model_dump(mode="json") for service in services]
+        )
+        return
+    if services:
+        console.print(_fleet_table(services) if fleet else _table(services))
     else:
         console.print("nothing registered", style=theme.BONE_DIM)
+
+    # Said out loud, because a shorter list because a machine was down reads
+    # exactly like a shorter list because nothing is registered there.
+    for missing in fleet.unreachable if fleet else []:
+        errors.print(f"{missing.node} ({missing.url}) {missing.reason}", style=theme.SHRIEKER)
 
 
 @app.command()
@@ -180,10 +215,16 @@ def get(
     token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Print the address of one service."""
+    """Print the address of one service.
+
+    Give it as `node/service` to ask a particular warden in the fleet.
+    """
+    node, _, service_name = name.rpartition("/")
     with _client(url, token) as client:
         try:
-            service = client.lookup(name)
+            service = (
+                client.fleet_lookup(node, service_name) if node else client.lookup(name)
+            )
         except WardenError as exc:
             raise _fail(exc) from exc
     if as_json:

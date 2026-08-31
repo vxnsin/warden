@@ -34,6 +34,7 @@ def manager(store: Store) -> Registry:
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         database=tmp_path / "registry.db",
+        node="hub",
         pool_start=8000,
         pool_end=8004,
         probe=False,

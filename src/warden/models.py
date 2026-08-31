@@ -141,5 +141,31 @@ class Node(BaseModel):
         return f"{self.pool_start}-{self.pool_end}"
 
 
+class FleetRegistration(Registration):
+    """A registration, and which warden handed it out."""
+
+    node: str
+
+
+class Unreachable(BaseModel):
+    """A node the hub could not get an answer from, and why."""
+
+    node: str
+    url: str
+    reason: str
+
+
+class FleetServices(BaseModel):
+    """What the fleet holds, and what could not be asked.
+
+    The two are separate on purpose. A shorter list because a machine was down
+    reads exactly like a shorter list because a service was released, and those
+    are not the same thing at all.
+    """
+
+    services: list[FleetRegistration]
+    unreachable: list[Unreachable]
+
+
 class ErrorResponse(BaseModel):
     detail: str

@@ -98,13 +98,13 @@ across the network.
 
 | Variable | Who carries it | What it opens |
 | --- | --- | --- |
-| `WARDEN_CLUSTER_TOKEN` | wardens, to each other | `POST /v1/nodes` |
-| `WARDEN_TOKEN` | a person, or a tool acting for one | everything else, including reading the fleet |
+| `WARDEN_CLUSTER_TOKEN` | wardens, to each other | announcing, and reading |
+| `WARDEN_TOKEN` | a person, or a tool acting for one | everything, including anything that changes state |
 
 A node has to be able to report without being handed the token that lets a
-person read and delete everything. And someone reading the node list is doing
-something different from a machine checking in, so the two are not
-interchangeable — neither token works in place of the other.
+person delete things. The cluster token also opens reads, because a hub asking
+its nodes what they hold is exactly that; it opens nothing that changes state,
+and it can never open a door `WARDEN_TOKEN` has closed.
 
 Both are empty by default, which is fine while warden listens on loopback. Set
 them before binding to anything else.
@@ -170,21 +170,62 @@ The machine name is lowercased and stripped of anything a service name would not
 accept, so `BUILD-01.office.lan` becomes `build-01.office.lan` rather than
 refusing to start.
 
+## One view across the fleet
+
+The hub can answer for every node at once:
+
+```sh
+$ warden ls --all --url http://hub:7010
+NODE      SERVICE       KIND     PROJECT  ADDRESS         PID
+build-01  build-runner  worker   ci       127.0.0.1:9000  -
+build-01  build-cache   cache    ci       127.0.0.1:9001  -
+hub       hub-api       backend  shop     127.0.0.1:8000  -
+```
+
+`--project` and `--kind` filter the whole fleet, not just the warden you asked.
+
+**A node that does not answer is named, never dropped.** It goes to standard
+error, so a pipe still gets a clean table:
+
+```
+$ warden ls --all --url http://hub:7010
+NODE  SERVICE  KIND     PROJECT  ADDRESS         PID
+hub   hub-api  backend  shop     127.0.0.1:8000  -
+build-01 (http://build-01:7010) could not be reached
+```
+
+That distinction matters more than it looks. A shorter list because a machine
+was down reads exactly like a shorter list because nothing is registered there,
+and those are not the same thing at all. `--json` keeps them in separate fields
+for the same reason.
+
+Every node is asked, including stale ones: a node the hub lost sight of may be
+perfectly well and simply unable to report, and skipping it would hide real
+services. They are asked in parallel, so a rack of dead nodes costs one timeout
+in total rather than one each.
+
+To ask a particular node about one service:
+
+```sh
+$ warden get build-01/build-runner --url http://hub:7010
+127.0.0.1:9000
+```
+
 ## Endpoints
 
 | Method | Path | Token | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/v1/nodes` | cluster | A warden announces itself; `201` new, `200` renewed |
-| `GET` | `/v1/nodes` | API | Every warden this one knows, with status |
+| `GET` | `/v1/nodes` | either | Every warden this one knows, with status |
 | `DELETE` | `/v1/nodes/{name}` | API | Forget a warden |
+| `GET` | `/v1/fleet/services` | either | Everything the fleet holds, plus what did not answer |
+| `GET` | `/v1/fleet/services/{node}/{name}` | either | One service on one named node |
 | `GET` | `/health` | none | Includes `node`, `role` and how many nodes are known |
 
 ## What this does not do yet
 
-The hub knows the fleet; it does not yet act on it. Reading across all nodes,
-registering through the hub onto a named node, and a fleet view in the dashboard
-are tracked in
-[#2](https://github.com/vxnsin/warden/issues/2),
+Registering through the hub onto a named node, and a fleet view in the
+dashboard, are tracked in
 [#3](https://github.com/vxnsin/warden/issues/3),
 [#4](https://github.com/vxnsin/warden/issues/4),
 [#5](https://github.com/vxnsin/warden/issues/5) and

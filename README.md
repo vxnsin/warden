@@ -192,6 +192,8 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | `POST` | `/v1/nodes` | A warden announces itself, cluster token |
 | `GET` | `/v1/nodes` | Every warden this one knows |
 | `DELETE` | `/v1/nodes/{name}` | Forget a warden |
+| `GET` | `/v1/fleet/services` | Everything the fleet holds, plus what did not answer |
+| `GET` | `/v1/fleet/services/{node}/{name}` | One service on one named node |
 
 ```sh
 curl -s localhost:7010/v1/services \
@@ -287,9 +289,22 @@ server that is not answering is a fact worth seeing, and
 run on the same machine; a node pointing at a hub elsewhere while advertising
 `127.0.0.1` is refused at startup rather than left to fail silently later.
 
-Wardens authenticate to each other with `WARDEN_CLUSTER_TOKEN`, which is separate
-from the `WARDEN_TOKEN` a person uses. Announcing takes the cluster token;
-reading the fleet takes the human one.
+The hub can answer for the whole fleet at once, and a node that does not answer
+is named rather than left out:
+
+```sh
+$ warden ls --all --url http://hub:7010
+NODE      SERVICE       KIND     PROJECT  ADDRESS         PID
+build-01  build-runner  worker   ci       127.0.0.1:9000  -
+hub       hub-api       backend  shop     127.0.0.1:8000  -
+build-01 (http://build-01:7010) could not be reached
+```
+
+`warden get build-01/build-runner` asks one named node.
+
+Wardens authenticate to each other with `WARDEN_CLUSTER_TOKEN`, separate from the
+`WARDEN_TOKEN` a person uses. The cluster token opens announcing and reading; it
+opens nothing that changes state.
 
 [docs/fleet.md](docs/fleet.md) goes through the whole thing: what the hub keeps,
 what survives what, and why it is built this way.

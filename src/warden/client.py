@@ -16,7 +16,14 @@ from warden.errors import (
     UnknownServiceError,
     WardenError,
 )
-from warden.models import Listener, Node, PoolStatus, Registration
+from warden.models import (
+    FleetRegistration,
+    FleetServices,
+    Listener,
+    Node,
+    PoolStatus,
+    Registration,
+)
 
 _STATUS_ERRORS: dict[int, type[WardenError]] = {
     403: NotPermittedError,
@@ -147,6 +154,20 @@ class WardenClient:
 
     def forget(self, name: str) -> None:
         self._request("DELETE", f"/v1/nodes/{name}")
+
+    def fleet_services(
+        self, *, project: str | None = None, kind: str | None = None
+    ) -> FleetServices:
+        """Everything the whole fleet holds, and the nodes that did not answer."""
+        params = {key: value for key, value in (("project", project), ("kind", kind)) if value}
+        return FleetServices.model_validate(
+            self._request("GET", "/v1/fleet/services", params=params)
+        )
+
+    def fleet_lookup(self, node: str, name: str) -> FleetRegistration:
+        return FleetRegistration.model_validate(
+            self._request("GET", f"/v1/fleet/services/{node}/{name}")
+        )
 
     @contextmanager
     def session(self, name: str, **kwargs: Any) -> Iterator[Registration]:

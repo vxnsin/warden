@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
-from warden import __version__
+from warden import __version__, aggregate
 from warden.allocator import PortPool
 from warden.config import Settings
 from warden.errors import NotPermittedError, WardenError
@@ -16,6 +16,8 @@ from warden.fleet import Fleet
 from warden.listeners import listeners, stop
 from warden.models import (
     ErrorResponse,
+    FleetRegistration,
+    FleetServices,
     HeartbeatRequest,
     Listener,
     Node,
@@ -71,18 +73,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await reporter.stop()
             store.close()
 
+    def _matches(secret: str | None, authorization: str | None) -> bool:
+        return bool(
+            secret
+            and authorization
+            and secrets.compare_digest(authorization, f"Bearer {secret}")
+        )
+
     def _check(secret: str | None, authorization: str | None, what: str) -> None:
         if secret is None:
             return
-        if not authorization or not secrets.compare_digest(authorization, f"Bearer {secret}"):
+        if not _matches(secret, authorization):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid or missing {what}")
 
     def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
+        """Anything a person does."""
         _check(settings.token, authorization, "API token")
 
     def cluster(authorization: Annotated[str | None, Header()] = None) -> None:
-        """Wardens talking to each other carry the cluster token, not a person's."""
+        """Announcing. A node must manage this without a person's token."""
         _check(settings.cluster_token, authorization, "cluster token")
+
+    def readable(authorization: Annotated[str | None, Header()] = None) -> None:
+        """Reading, for a person or for another warden in the same fleet.
+
+        The cluster token only ever adds access here; it can never open a door
+        that WARDEN_TOKEN has closed, and it opens nothing that changes state.
+        """
+        if settings.token is None:
+            return
+        if _matches(settings.token, authorization):
+            return
+        if _matches(settings.cluster_token, authorization):
+            return
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing token")
 
     app = FastAPI(
         title="Warden",
@@ -97,12 +121,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
 
     v1 = APIRouter(prefix="/v1", dependencies=[Depends(authorize)])
+    reads = APIRouter(prefix="/v1", dependencies=[Depends(readable)])
 
-    @v1.get("/pool", summary="Pool usage")
+    @reads.get("/pool", summary="Pool usage")
     def pool(manager: Manager) -> PoolStatus:
         return manager.pool_status()
 
-    @v1.get("/services", summary="List registered services")
+    @reads.get("/services", summary="List registered services")
     def list_services(
         manager: Manager, project: str | None = None, kind: str | None = None
     ) -> list[Registration]:
@@ -125,7 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return registration
 
-    @v1.get(
+    @reads.get(
         "/services/{name}",
         summary="Look up a single service",
         responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
@@ -150,7 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def release(name: str, manager: Manager) -> None:
         manager.release(name)
 
-    @v1.get("/listeners", summary="Every socket bound on this machine")
+    @reads.get("/listeners", summary="Every socket bound on this machine")
     def list_listeners(udp: bool = True) -> list[Listener]:
         return listeners(udp=udp)
 
@@ -190,7 +215,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return node
 
-    @nodes.get("", summary="Every warden this one knows", dependencies=[Depends(authorize)])
+    @nodes.get("", summary="Every warden this one knows", dependencies=[Depends(readable)])
     def list_nodes(fleet: FleetDep) -> list[Node]:
         return fleet.nodes()
 
@@ -204,8 +229,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def forget(name: str, fleet: FleetDep) -> None:
         fleet.forget(name)
 
+    fleet_view = APIRouter(
+        prefix="/v1/fleet", tags=["fleet"], dependencies=[Depends(readable)]
+    )
+
+    @fleet_view.get("/services", summary="Everything the whole fleet holds")
+    async def fleet_services(
+        manager: Manager,
+        fleet: FleetDep,
+        project: str | None = None,
+        kind: str | None = None,
+    ) -> FleetServices:
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.gather_services(
+                http,
+                fleet.nodes(),
+                here=settings.node,
+                local=manager.list(project=project, kind=kind),
+                project=project,
+                kind=kind,
+            )
+
+    @fleet_view.get(
+        "/services/{node}/{name}",
+        summary="One service on one named node",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def fleet_lookup(
+        node: str, name: str, manager: Manager, fleet: FleetDep
+    ) -> FleetRegistration:
+        if node == settings.node:
+            return FleetRegistration(node=node, **manager.get(name).model_dump())
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.lookup_on(http, fleet.nodes(), node, name)
+
+    app.include_router(reads)
     app.include_router(v1)
     app.include_router(nodes)
+    app.include_router(fleet_view)
 
     @app.get("/health", summary="Liveness probe", tags=["meta"])
     def health(manager: Manager, fleet: FleetDep) -> dict[str, object]:

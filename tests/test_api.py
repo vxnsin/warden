@@ -197,14 +197,66 @@ def test_health_counts_the_nodes_it_knows(client: TestClient):
     assert client.get("/health").json()["nodes"] == 1
 
 
-def test_announcing_needs_the_cluster_token_not_the_api_one(settings: Settings):
-    guarded = settings.model_copy(update={"token": "human", "cluster_token": "between-wardens"})
-    with TestClient(create_app(guarded)) as client:
+HUMAN = {"Authorization": "Bearer human"}
+CLUSTER = {"Authorization": "Bearer between-wardens"}
+
+
+def guarded(settings: Settings) -> TestClient:
+    return TestClient(
+        create_app(
+            settings.model_copy(
+                update={"token": "human", "cluster_token": "between-wardens"}
+            )
+        )
+    )
+
+
+def test_announcing_takes_the_cluster_token_and_not_a_persons(settings: Settings):
+    with guarded(settings) as client:
         assert client.post("/v1/nodes", json=NODE).status_code == 401
-        human = {"Authorization": "Bearer human"}
-        assert client.post("/v1/nodes", json=NODE, headers=human).status_code == 401
-        cluster = {"Authorization": "Bearer between-wardens"}
-        assert client.post("/v1/nodes", json=NODE, headers=cluster).status_code == 201
-        # Reading the fleet is for people, so it takes the human token.
-        assert client.get("/v1/nodes", headers=cluster).status_code == 401
-        assert client.get("/v1/nodes", headers=human).status_code == 200
+        assert client.post("/v1/nodes", json=NODE, headers=HUMAN).status_code == 401
+        assert client.post("/v1/nodes", json=NODE, headers=CLUSTER).status_code == 201
+
+
+def test_either_token_may_read(settings: Settings):
+    # A hub fanning out to its nodes carries the cluster token; a person carries
+    # theirs. Both are only reading.
+    with guarded(settings) as client:
+        for path in ("/v1/services", "/v1/pool", "/v1/nodes", "/v1/fleet/services"):
+            assert client.get(path).status_code == 401, path
+            assert client.get(path, headers=HUMAN).status_code == 200, path
+            assert client.get(path, headers=CLUSTER).status_code == 200, path
+
+
+def test_the_cluster_token_changes_nothing(settings: Settings):
+    with guarded(settings) as client:
+        client.post("/v1/nodes", json=NODE, headers=CLUSTER)
+        assert client.delete("/v1/nodes/build-01", headers=CLUSTER).status_code == 401
+        assert client.post(
+            "/v1/services", json={"name": "api", "kind": "backend"}, headers=CLUSTER
+        ).status_code == 401
+        assert client.delete("/v1/nodes/build-01", headers=HUMAN).status_code == 204
+
+
+def test_the_fleet_view_includes_the_hubs_own_services(client: TestClient):
+    client.post("/v1/services", json={"name": "api", "kind": "backend"})
+    body = client.get("/v1/fleet/services").json()
+    assert [(s["node"], s["name"]) for s in body["services"]] == [("hub", "api")]
+    assert body["unreachable"] == []
+
+
+def test_a_node_that_cannot_be_reached_is_named_in_the_fleet_view(client: TestClient):
+    client.post("/v1/nodes", json={**NODE, "url": "http://192.0.2.1:7010"})
+    body = client.get("/v1/fleet/services").json()
+    assert [u["node"] for u in body["unreachable"]] == ["build-01"]
+
+
+def test_a_qualified_lookup_on_this_warden_itself(client: TestClient):
+    client.post("/v1/services", json={"name": "api", "kind": "backend"})
+    response = client.get("/v1/fleet/services/hub/api")
+    assert response.status_code == 200
+    assert response.json()["node"] == "hub"
+
+
+def test_a_qualified_lookup_on_a_node_nobody_knows(client: TestClient):
+    assert client.get("/v1/fleet/services/nowhere/api").status_code == 404
