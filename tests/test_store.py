@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from warden.models import Registration
+from warden.models import Node, Registration
 from warden.store import Store
 
 
@@ -109,3 +109,65 @@ def test_a_database_from_an_older_version_keeps_its_registrations(tmp_path):
         assert registration is not None
         assert registration.port == 8000
         assert registration.ttl is None
+
+
+def node(name: str = "build-01", **kwargs) -> Node:
+    now = datetime.now(UTC)
+    return Node(
+        name=name,
+        url=kwargs.pop("url", f"http://{name}:7010"),
+        pool_start=kwargs.pop("pool_start", 9000),
+        pool_end=kwargs.pop("pool_end", 9099),
+        version=kwargs.pop("version", "0.1.0"),
+        first_seen=kwargs.pop("first_seen", now),
+        last_seen=kwargs.pop("last_seen", now),
+        expires_at=kwargs.pop("expires_at", now + timedelta(seconds=90)),
+    )
+
+
+def test_a_saved_node_comes_back_unchanged(store: Store):
+    saved = node()
+    store.save_node(saved)
+    assert store.get_node("build-01") == saved
+
+
+def test_an_unknown_node_returns_nothing(store: Store):
+    assert store.get_node("build-01") is None
+
+
+def test_saving_a_node_twice_updates_rather_than_duplicates(store: Store):
+    store.save_node(node())
+    store.save_node(node(url="http://10.0.0.7:7010"))
+    assert store.count_nodes() == 1
+    assert store.get_node("build-01").url == "http://10.0.0.7:7010"
+
+
+def test_the_first_sighting_of_a_node_is_not_overwritten(store: Store):
+    first = datetime.now(UTC) - timedelta(days=3)
+    store.save_node(node(first_seen=first))
+    store.save_node(node(first_seen=datetime.now(UTC)))
+    assert store.get_node("build-01").first_seen == first
+
+
+def test_nodes_are_listed_by_name(store: Store):
+    for name in ("web-02", "build-01"):
+        store.save_node(node(name))
+    assert [row.name for row in store.list_nodes()] == ["build-01", "web-02"]
+
+
+def test_deleting_a_node_reports_whether_anything_went(store: Store):
+    store.save_node(node())
+    assert store.delete_node("build-01") is True
+    assert store.delete_node("build-01") is False
+
+
+def test_a_database_from_before_the_fleet_gains_the_table(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(OLD_SCHEMA)
+    old.commit()
+    old.close()
+
+    with Store(path) as store:
+        store.save_node(node())
+        assert store.count_nodes() == 1

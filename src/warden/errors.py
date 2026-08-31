@@ -34,3 +34,7 @@ class ProtectedProcessError(WardenError):
 
 class StillRunningError(WardenError):
     status_code = 409
+
+
+class UnknownNodeError(WardenError):
+    status_code = 404

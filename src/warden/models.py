@@ -1,9 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 Name = Annotated[
     str,
@@ -89,6 +98,47 @@ class PoolStatus(BaseModel):
     reserved: list[int]
     allocated: int
     available: int
+
+
+class NodeAnnouncement(BaseModel):
+    """A warden telling a hub that it exists and what it hands out."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Name
+    url: str
+    pool_start: Port
+    pool_end: Port
+    version: str
+
+    @field_validator("url")
+    @classmethod
+    def _must_be_an_address(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("url must be an http address, for example http://build-01:7010")
+        return value.rstrip("/")
+
+
+class Node(BaseModel):
+    name: str
+    url: str
+    pool_start: int
+    pool_end: int
+    version: str
+    first_seen: datetime
+    last_seen: datetime
+    expires_at: datetime
+
+    @computed_field
+    @property
+    def status(self) -> str:
+        """A node that stopped reporting is shown as stale, never quietly dropped."""
+        return "online" if self.expires_at > datetime.now(UTC) else "stale"
+
+    @property
+    def pool(self) -> str:
+        return f"{self.pool_start}-{self.pool_end}"
 
 
 class ErrorResponse(BaseModel):

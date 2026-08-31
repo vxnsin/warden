@@ -6,7 +6,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from warden.models import Registration
+from warden.models import Node, Registration
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS registrations (
@@ -26,6 +26,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS registrations_endpoint
     ON registrations (host, port);
 CREATE INDEX IF NOT EXISTS registrations_project
     ON registrations (project);
+
+CREATE TABLE IF NOT EXISTS nodes (
+    name       TEXT PRIMARY KEY,
+    url        TEXT NOT NULL,
+    pool_start INTEGER NOT NULL,
+    pool_end   INTEGER NOT NULL,
+    version    TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    last_seen  TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
 """
 
 # Columns added after the first release, applied to databases that predate them.
@@ -49,6 +60,19 @@ def _row_to_registration(row: sqlite3.Row) -> Registration:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
+    )
+
+
+def _row_to_node(row: sqlite3.Row) -> Node:
+    return Node(
+        name=row["name"],
+        url=row["url"],
+        pool_start=row["pool_start"],
+        pool_end=row["pool_end"],
+        version=row["version"],
+        first_seen=datetime.fromisoformat(row["first_seen"]),
+        last_seen=datetime.fromisoformat(row["last_seen"]),
+        expires_at=datetime.fromisoformat(row["expires_at"]),
     )
 
 
@@ -166,6 +190,55 @@ class Store:
     def delete(self, name: str) -> bool:
         with self._lock:
             cursor = self._db.execute("DELETE FROM registrations WHERE name = ?", (name,))
+            self._db.commit()
+        return cursor.rowcount > 0
+
+    def list_nodes(self) -> list[Node]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM nodes ORDER BY name").fetchall()
+        return [_row_to_node(row) for row in rows]
+
+    def get_node(self, name: str) -> Node | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM nodes WHERE name = ?", (name,)).fetchone()
+        return _row_to_node(row) if row else None
+
+    def count_nodes(self) -> int:
+        with self._lock:
+            return self._db.execute("SELECT COUNT(*) AS n FROM nodes").fetchone()["n"]
+
+    def save_node(self, node: Node) -> None:
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO nodes
+                    (name, url, pool_start, pool_end, version,
+                     first_seen, last_seen, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    url = excluded.url,
+                    pool_start = excluded.pool_start,
+                    pool_end = excluded.pool_end,
+                    version = excluded.version,
+                    last_seen = excluded.last_seen,
+                    expires_at = excluded.expires_at
+                """,
+                (
+                    node.name,
+                    node.url,
+                    node.pool_start,
+                    node.pool_end,
+                    node.version,
+                    _isoformat(node.first_seen),
+                    _isoformat(node.last_seen),
+                    _isoformat(node.expires_at),
+                ),
+            )
+            self._db.commit()
+
+    def delete_node(self, name: str) -> bool:
+        with self._lock:
+            cursor = self._db.execute("DELETE FROM nodes WHERE name = ?", (name,))
             self._db.commit()
         return cursor.rowcount > 0
 
