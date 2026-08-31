@@ -2,7 +2,8 @@
   <title id="title">warden</title>
   <rect x="2" y="2" width="60" height="60" rx="16" fill="#0e1a1c"/>
   <rect x="4.5" y="4.5" width="55" height="55" rx="13.5" fill="none" stroke="#1e3538" stroke-width="3"/>
-  <path d="M32 12 L32 20 M32 44 L32 52 M12 32 L20 32 M44 32 L52 32" stroke="#17847f" stroke-width="3" stroke-linecap="round"/>
-  <rect x="20" y="22" width="8" height="20" rx="4" fill="#2be0d6"/>
-  <rect x="36" y="22" width="8" height="20" rx="4" fill="#17847f"/>
+  <path d="M26 19 L19 10 M38 19 L45 10" stroke="#17847f" stroke-width="4.5" stroke-linecap="round"/>
+  <rect x="25" y="16" width="14" height="12" rx="3" fill="#17847f"/>
+  <rect x="16" y="31" width="32" height="21" rx="5" fill="#17847f"/>
+  <circle cx="32" cy="41" r="5" fill="#2be0d6"/>
 </svg>

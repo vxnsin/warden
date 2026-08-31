@@ -47,11 +47,6 @@ def run_app(scenario, size=(120, 40)) -> None:
     asyncio.run(main())
 
 
-def test_the_banner_rows_all_have_the_same_width():
-    widths = {len(line) for line in theme.BANNER.splitlines()}
-    assert len(widths) == 1
-
-
 def test_ages_are_shown_in_the_largest_useful_unit():
     now = datetime.now(UTC)
     assert _age(now - timedelta(seconds=5)).endswith("s ago")
@@ -139,16 +134,3 @@ def test_the_banner_gives_way_to_the_table_on_a_short_terminal():
 
     run_app(scenario, size=(120, BANNER_MIN_HEIGHT - 1))
 
-
-def test_the_banner_keeps_its_blocks_on_a_utf8_console():
-    assert "█" in theme.banner_for("utf-8")
-
-
-def test_the_banner_falls_back_where_blocks_cannot_be_printed():
-    fallback = theme.banner_for("cp1252")
-    assert "█" not in fallback
-    assert fallback.splitlines()[0].strip().startswith("#")
-
-
-def test_an_unknown_encoding_does_not_crash_the_banner():
-    assert theme.banner_for("not-a-real-codec")

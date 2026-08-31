@@ -20,7 +20,7 @@ from warden.models import PoolStatus, Registration
 COLUMNS = ("#", "SERVICE", "KIND", "PROJECT", "ADDRESS", "PID", "LEASE", "SEEN")
 
 # Below this height the banner would leave the table without room to show anything.
-BANNER_MIN_HEIGHT = 26
+BANNER_MIN_HEIGHT = 30
 
 PALETTE = {
     "sculk": theme.SCULK,
@@ -46,10 +46,7 @@ Screen {
     height: 1fr;
 }
 
-#banner {
-    color: $glow;
-    height: auto;
-}
+#banner { height: auto; }
 
 #tagline {
     color: $dim;
@@ -183,7 +180,7 @@ class WardenApp(App[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="shell"):
-            yield Static(theme.BANNER, id="banner")
+            yield Static(theme.banner_text(), id="banner")
             yield Static(f"{theme.TAGLINE}  ~  {self.client.url}", id="tagline")
             yield Static("REGISTERED SERVICES", id="section")
             yield DataTable(id="services", cursor_type="row")

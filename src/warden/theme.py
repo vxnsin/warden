@@ -1,8 +1,14 @@
-"""The Deep Dark palette.
+"""The Deep Dark palette and the banner.
 
 Sculk black for the ground, the warden's cyan heartbeat for anything live,
 amethyst and shrieker amber for telling one kind of service from another.
 """
+
+from __future__ import annotations
+
+from itertools import groupby
+
+from rich.text import Text
 
 SCULK = "#08100f"
 SCULK_RAISED = "#0e1a1c"
@@ -29,13 +35,32 @@ KIND_COLOURS = {
     "proxy": GLOW_DIM,
 }
 
-BANNER = r"""
-██     ██  █████  ██████  ██████  ███████ ███    ██
-██     ██ ██   ██ ██   ██ ██   ██ ██      ████   ██
-██  █  ██ ███████ ██████  ██   ██ █████   ██ ██  ██
-██ ███ ██ ██   ██ ██   ██ ██   ██ ██      ██  ██ ██
- ███ ███  ██   ██ ██   ██ ██████  ███████ ██   ████
-""".strip("\n")
+BLOCK = "█"
+HEART = "*"
+GAP = "    "
+
+# Horns, a head with no eyes, an open ribcage around the glowing heart, and the
+# long arms. Drawn from full blocks only, so a console that cannot print them
+# needs a single substitution rather than a whole second drawing.
+MASCOT = (
+    "██             ██",
+    " ███         ███ ",
+    "    █████████    ",
+    "    ██     ██    ",
+    "    █████████    ",
+    "█████████████████",
+    "███  █ *** █  ███",
+    "███  █ *** █  ███",
+    "███           ███",
+)
+
+WORDMARK = (
+    "██     ██  █████  ██████  ██████  ███████ ███    ██",
+    "██     ██ ██   ██ ██   ██ ██   ██ ██      ████   ██",
+    "██  █  ██ ███████ ██████  ██   ██ █████   ██ ██  ██",
+    "██ ███ ██ ██   ██ ██   ██ ██   ██ ██      ██  ██ ██",
+    " ███ ███  ██   ██ ██   ██ ██████  ███████ ██   ████",
+)
 
 TAGLINE = "nothing binds a port without asking"
 
@@ -44,14 +69,63 @@ def kind_colour(kind: str) -> str:
     return KIND_COLOURS.get(kind, BONE_DIM)
 
 
-def banner_for(encoding: str | None) -> str:
-    """The banner, drawn with a character the console can actually print.
+def _block_for(encoding: str | None) -> str:
+    """The character to draw with.
 
-    A Windows console still running a legacy code page cannot encode the block
-    character, and would abort the whole command over a decoration.
+    A Windows console still running a legacy code page cannot encode the block,
+    and would abort the whole command over a decoration.
     """
     try:
-        BANNER.encode(encoding or "utf-8")
+        BLOCK.encode(encoding or "utf-8")
     except (LookupError, UnicodeEncodeError):
-        return BANNER.replace("█", "#")
-    return BANNER
+        return "#"
+    return BLOCK
+
+
+def _rows() -> list[tuple[str, str]]:
+    """Each mascot line beside its wordmark line, the wordmark vertically centred."""
+    top = (len(MASCOT) - len(WORDMARK)) // 2
+    blank = " " * len(WORDMARK[0])
+    return [
+        (mascot, WORDMARK[index - top] if 0 <= index - top < len(WORDMARK) else blank)
+        for index, mascot in enumerate(MASCOT)
+    ]
+
+
+def banner_for(encoding: str | None = None) -> str:
+    """The banner as plain text."""
+    block = _block_for(encoding)
+    return "\n".join(
+        f"{mascot}{GAP}{word}".replace(HEART, block).replace(BLOCK, block)
+        for mascot, word in _rows()
+    )
+
+
+def _style_of(char: str) -> str:
+    if char == HEART:
+        return GLOW
+    if char == BLOCK:
+        return GLOW_DIM
+    return ""
+
+
+def banner_text(encoding: str | None = None) -> Text:
+    """The banner with the mascot beside the name and its heart lit.
+
+    Written one run of equal colour at a time; a span per character would bloat
+    every screenshot the dashboard exports.
+    """
+    block = _block_for(encoding)
+    text = Text()
+    for index, (mascot, word) in enumerate(_rows()):
+        if index:
+            text.append("\n")
+        for style, chars in groupby(mascot, key=_style_of):
+            run = "".join(chars).replace(HEART, block).replace(BLOCK, block)
+            text.append(run, style=style)
+        text.append(GAP)
+        text.append(word.replace(BLOCK, block), style=GLOW)
+    return text
+
+
+BANNER = banner_for()

@@ -47,6 +47,12 @@ def _dump(payload: object) -> None:
     console.print_json(json.dumps(payload, default=str))
 
 
+def _greet() -> None:
+    console.print(theme.banner_text(getattr(console.file, "encoding", None)))
+    console.print(theme.TAGLINE, style=theme.BONE_DIM)
+    console.print()
+
+
 def _address(service: Registration) -> Text:
     text = Text(f"{service.host}:", style=theme.BONE_DIM)
     text.append(str(service.port), style=theme.GLOW)
@@ -79,6 +85,7 @@ def root(
         console.print(__version__)
         raise typer.Exit
     if ctx.invoked_subcommand is None:
+        _greet()
         console.print(ctx.get_help())
         raise typer.Exit
 
@@ -120,9 +127,7 @@ def serve(
         overrides["pool_end"] = int(end or start)
 
     settings = Settings(**overrides)
-    console.print(theme.banner_for(getattr(console.file, "encoding", None)), style=theme.GLOW)
-    console.print(theme.TAGLINE, style=theme.BONE_DIM)
-    console.print()
+    _greet()
     console.print(f"v{__version__}  listening on {settings.url}", style=theme.BONE_DIM)
     console.print(
         f"pool {settings.pool_start}-{settings.pool_end}"
