@@ -13,6 +13,7 @@ from warden import __version__, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
+from warden.listeners import holder_of, listeners, stop
 from warden.models import Registration
 
 app = typer.Typer(
@@ -232,6 +233,113 @@ def register(
         _dump(service.model_dump(mode="json"))
     else:
         console.print(service.port)
+
+
+def _account(user: str | None) -> str:
+    """Just the account, without the domain that pads every Windows row."""
+    if not user:
+        return "-"
+    return user.rsplit("\\", 1)[-1]
+
+
+def _registered_names(url: str | None, token: str | None) -> dict[tuple[str, int], str]:
+    """Which sockets warden itself handed out, so strangers stand out in the list.
+
+    A warden need not be running for `warden ports` to work at all, so a registry
+    that cannot be reached simply adds nothing.
+    """
+    try:
+        with _client(url, token) as client:
+            return {(service.host, service.port): service.name for service in client.services()}
+    except WardenError:
+        return {}
+
+
+@app.command()
+def ports(
+    port: Annotated[int | None, typer.Option(help="Only this port.")] = None,
+    udp: Annotated[bool, typer.Option("--udp/--no-udp", help="Include UDP sockets.")] = True,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Show what is listening on this machine."""
+    try:
+        rows = listeners(udp=udp)
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    if port is not None:
+        rows = [row for row in rows if row.port == port]
+
+    if as_json:
+        _dump([row.model_dump(mode="json") for row in rows])
+        return
+    if not rows:
+        console.print("nothing is listening" if port is None else f"nothing on port {port}",
+                      style=theme.BONE_DIM)
+        return
+
+    known = _registered_names(url, token)
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("PORT", "PROTO", "PROCESS", "PID", "USER", "ADDRESS", "WARDEN"):
+        table.add_column(column)
+    for row in rows:
+        table.add_row(
+            Text(str(row.port), style=theme.GLOW),
+            Text(row.protocol, style=theme.BONE_DIM),
+            row.process or Text("unknown", style=theme.BONE_DIM),
+            Text(str(row.pid) if row.pid else "-", style=theme.BONE_DIM),
+            Text(_account(row.user), style=theme.BONE_DIM),
+            Text(row.host, style=theme.BONE_DIM),
+            Text(known.get((row.host, row.port), "-"), style=theme.MOSS),
+        )
+    console.print(table)
+
+    unnamed = sum(1 for row in rows if row.process is None)
+    if unnamed:
+        console.print(
+            f"\n{unnamed} of {len(rows)} belong to another user - "
+            "run warden as administrator to see them",
+            style=theme.SHRIEKER,
+        )
+
+
+@app.command()
+def kill(
+    target: Annotated[int, typer.Argument(help="A port to free, or a process id with --pid.")],
+    pid: Annotated[bool, typer.Option("--pid", help="Read the number as a process id.")] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Kill it outright if it will not stop politely.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask first.")] = False,
+) -> None:
+    """Stop whatever is holding a port."""
+    try:
+        if pid:
+            target_pid, description = target, f"process {target}"
+        else:
+            holder = holder_of(target)
+            if holder is None:
+                errors.print(f"nothing is listening on port {target}", style=theme.EMBER)
+                raise typer.Exit(1)
+            if holder.pid is None:
+                errors.print(
+                    f"port {target} is held by a process this user may not see - "
+                    "run warden as administrator",
+                    style=theme.EMBER,
+                )
+                raise typer.Exit(1)
+            target_pid = holder.pid
+            description = f"{holder.process} ({holder.pid}) on port {target}"
+
+        if not yes and not typer.confirm(f"Stop {description}?"):
+            console.print("left alone", style=theme.BONE_DIM)
+            return
+
+        name = stop(target_pid, force=force)
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    console.print(f"stopped {name} ({target_pid})")
 
 
 @app.command()
