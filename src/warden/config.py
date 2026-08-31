@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     reserved: PortSet = Field(default_factory=set)
 
     probe: bool = True
+    allow_kill: bool = False
     token: str | None = None
 
     @model_validator(mode="after")

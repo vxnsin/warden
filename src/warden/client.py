@@ -10,14 +10,16 @@ import httpx
 
 from warden.config import DEFAULT_URL
 from warden.errors import (
+    NotPermittedError,
     PoolExhaustedError,
     PortUnavailableError,
     UnknownServiceError,
     WardenError,
 )
-from warden.models import PoolStatus, Registration
+from warden.models import Listener, PoolStatus, Registration
 
 _STATUS_ERRORS: dict[int, type[WardenError]] = {
+    403: NotPermittedError,
     404: UnknownServiceError,
     409: PortUnavailableError,
     503: PoolExhaustedError,
@@ -118,6 +120,14 @@ class WardenClient:
 
     def pool(self) -> PoolStatus:
         return PoolStatus.model_validate(self._request("GET", "/v1/pool"))
+
+    def listeners(self, *, udp: bool = True) -> list[Listener]:
+        """Every socket bound on the machine the warden runs on."""
+        payload = self._request("GET", "/v1/listeners", params={"udp": udp})
+        return [Listener.model_validate(item) for item in payload]
+
+    def stop(self, pid: int, *, force: bool = False) -> None:
+        self._request("DELETE", f"/v1/listeners/{pid}", params={"force": force})
 
     @contextmanager
     def session(self, name: str, **kwargs: Any) -> Iterator[Registration]:

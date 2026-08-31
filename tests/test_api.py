@@ -125,3 +125,22 @@ def test_a_wish_and_a_demand_together_are_rejected(client: TestClient):
         json={"name": "api", "kind": "backend", "preferred_port": 8000, "require_port": 8001},
     )
     assert response.status_code == 422
+
+
+def test_the_listeners_of_this_machine_are_reported(client: TestClient):
+    response = client.get("/v1/listeners")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_stopping_a_process_over_the_api_is_off_by_default(client: TestClient):
+    response = client.delete("/v1/listeners/999999")
+    assert response.status_code == 403
+    assert "WARDEN_ALLOW_KILL" in response.json()["detail"]
+
+
+def test_the_switch_opens_the_door_but_the_process_must_exist(settings: Settings):
+    permitted = settings.model_copy(update={"allow_kill": True})
+    with TestClient(create_app(permitted)) as client:
+        response = client.delete("/v1/listeners/999999")
+        assert response.status_code == 404
