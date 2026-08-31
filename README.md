@@ -9,6 +9,28 @@ grabbed while it was down.
 
 <img src="assets/tui.svg" alt="The warden dashboard" width="900">
 
+## What is on port 3000?
+
+Not every port on a machine came from a registry. `warden ports` shows every
+socket the operating system reports, whether warden handed it out or not, and
+`warden kill` frees one:
+
+```sh
+$ warden ports --port 3000
+PORT  PROTO  PROCESS   PID    USER              ADDRESS  WARDEN
+3000  tcp    node.exe  25084  dev               0.0.0.0  -
+
+$ warden kill 3000
+Stop node.exe (25084) on port 3000? [y/N]: y
+stopped node.exe (25084)
+```
+
+Neither needs a warden running anywhere — they read the machine directly. The
+WARDEN column names the service whenever the port did come from the registry.
+
+Sockets owned by another user appear without a process name; run warden as
+administrator on Windows, or with `sudo` on Linux and macOS, to see those too.
+
 ## Why
 
 On a machine that runs a handful of projects, ports are picked by hand and
@@ -27,23 +49,20 @@ starts and talks to the wrong neighbour.
 ## Install
 
 ```sh
-uv tool install warden
-```
-
-Or run it without installing:
-
-```sh
-uvx warden serve
-```
-
-From a checkout:
-
-```sh
 git clone https://github.com/vxnsin/warden
 cd warden
 uv sync
-uv run warden serve
+uv run warden
 ```
+
+To get `warden` as a command of its own, without the `uv run` in front:
+
+```sh
+uv tool install .
+```
+
+It is not on PyPI yet, so `uv tool install warden` by name does not work — see
+[#1](https://github.com/vxnsin/warden/issues/1).
 
 ## Quick start
 
@@ -99,14 +118,23 @@ outside the pool, which is how a legacy service on `3000` joins the registry.
 warden tui
 ```
 
-A live table of every registration, refreshed every two seconds.
+Two live tables, refreshed every two seconds. `tab` swaps between what warden
+handed out and what is actually listening:
+
+<img src="assets/tui-ports.svg" alt="The listening ports view" width="900">
 
 | Key | Action |
 | --- | --- |
 | `↑` `↓` `j` `k` | Move |
+| `tab` | Switch between services and ports |
 | `r` | Reload now |
-| `d` | Release the selected service |
+| `d` | Release the service, or stop the process |
 | `q` | Quit |
+
+The dashboard reads both tables from the warden it is pointed at, so the ports
+it lists are the ones on *that* machine. Stopping a process from here goes
+through the API and needs `WARDEN_ALLOW_KILL` (see below); `warden kill` on the
+command line is local and always works.
 
 ## From Python
 
@@ -159,6 +187,8 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | `GET` | `/v1/services/{name}` | Look up one service |
 | `POST` | `/v1/services/{name}/heartbeat` | Extend a lease |
 | `DELETE` | `/v1/services/{name}` | Release a port |
+| `GET` | `/v1/listeners` | Every socket bound on that machine |
+| `DELETE` | `/v1/listeners/{pid}` | Stop a process, off unless `WARDEN_ALLOW_KILL` |
 
 ```sh
 curl -s localhost:7010/v1/services \
@@ -229,11 +259,17 @@ Every setting is an environment variable prefixed `WARDEN_`, or a line in a
 | `WARDEN_RESERVED` | empty | Ports to keep out, e.g. `8080,8443,9000-9010` |
 | `WARDEN_DATABASE` | platform data dir | SQLite file holding the registry |
 | `WARDEN_PROBE` | `true` | Test ports for existing listeners |
+| `WARDEN_ALLOW_KILL` | `false` | Let the API stop processes |
 | `WARDEN_TOKEN` | empty | Require `Authorization: Bearer <token>` |
 | `WARDEN_URL` | `http://127.0.0.1:7010` | Registry the client and CLI talk to |
 
 The registry binds to loopback and has no authentication by default. Set a token
 before binding it to anything else.
+
+`WARDEN_ALLOW_KILL` is off on purpose. A warden reachable from the network would
+otherwise let anyone holding the token end processes on that machine, which is a
+much bigger thing to hand out than a port number. `warden kill` on the command
+line is unaffected: it acts locally and never asks the API.
 
 ## Colours
 
