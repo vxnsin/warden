@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import ipaddress
+import re
+import socket
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 from platformdirs import user_data_path
-from pydantic import BeforeValidator, Field, model_validator
+from pydantic import BeforeValidator, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_URL = "http://127.0.0.1:7010"
@@ -34,6 +38,32 @@ def default_database() -> Path:
     return user_data_path("warden", appauthor=False) / "registry.db"
 
 
+def slugify(value: str) -> str:
+    """Bend a machine name into something the Name pattern accepts.
+
+    Real machine names carry capitals, spaces and dots; refusing to start over
+    that would be a poor first impression for a default nobody chose.
+    """
+    cleaned = re.sub(r"[^a-z0-9._-]+", "-", value.lower()).strip("-._")
+    return cleaned[:64] or "warden"
+
+
+def default_node() -> str:
+    return slugify(socket.gethostname())
+
+
+def reachable_from_elsewhere(url: str) -> bool:
+    """Whether another machine could actually open this address."""
+    host = urlparse(url).hostname or ""
+    if host in {"", "localhost"}:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a name we cannot resolve here may still resolve there
+    return not (address.is_loopback or address.is_unspecified)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="WARDEN_",
@@ -54,6 +84,22 @@ class Settings(BaseSettings):
     allow_kill: bool = False
     token: str | None = None
 
+    node: str = Field(default_factory=default_node)
+    advertise: str | None = None
+    upstream: str | None = None
+    cluster_token: str | None = None
+    node_ttl: int = Field(default=90, ge=10, le=86_400)
+
+    @field_validator("node")
+    @classmethod
+    def _tidy_node(cls, value: str) -> str:
+        return slugify(value)
+
+    @field_validator("upstream", "advertise")
+    @classmethod
+    def _tidy_url(cls, value: str | None) -> str | None:
+        return value.rstrip("/") if value else value
+
     @model_validator(mode="after")
     def _check_pool(self) -> Settings:
         if self.pool_start > self.pool_end:
@@ -63,6 +109,33 @@ class Settings(BaseSettings):
             self.reserved = self.reserved | {self.port}
         return self
 
+    @model_validator(mode="after")
+    def _check_advertise(self) -> Settings:
+        """Refuse an address the hub could never open.
+
+        Only when the hub is somewhere else, though: a hub on this same machine
+        reaches a loopback address perfectly well, and that is how anyone tries
+        the thing out before spreading it over two servers.
+        """
+        if not self.upstream:
+            return self
+        if reachable_from_elsewhere(self.upstream) and not reachable_from_elsewhere(
+            self.advertise_url
+        ):
+            raise ValueError(
+                f"the warden at {self.upstream} cannot reach this one at "
+                f"{self.advertise_url}; set WARDEN_ADVERTISE to an address it can use"
+            )
+        return self
+
     @property
     def url(self) -> str:
         return f"http://{self.host}:{self.port}"
+
+    @property
+    def advertise_url(self) -> str:
+        return self.advertise or self.url
+
+    @property
+    def role(self) -> str:
+        return "edge" if self.upstream else "hub"
