@@ -144,3 +144,67 @@ def test_the_switch_opens_the_door_but_the_process_must_exist(settings: Settings
     with TestClient(create_app(permitted)) as client:
         response = client.delete("/v1/listeners/999999")
         assert response.status_code == 404
+
+
+NODE = {
+    "name": "build-01",
+    "url": "http://build-01:7010",
+    "pool_start": 9000,
+    "pool_end": 9099,
+    "version": "0.1.0",
+}
+
+
+def test_a_node_can_announce_itself(client: TestClient):
+    response = client.post("/v1/nodes", json=NODE)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "build-01"
+    assert body["status"] == "online"
+
+
+def test_announcing_again_renews_the_node(client: TestClient):
+    client.post("/v1/nodes", json=NODE)
+    assert client.post("/v1/nodes", json=NODE).status_code == 200
+    assert len(client.get("/v1/nodes").json()) == 1
+
+
+def test_the_known_nodes_are_listed(client: TestClient):
+    client.post("/v1/nodes", json=NODE)
+    client.post("/v1/nodes", json={**NODE, "name": "web-02", "url": "http://web-02:7010"})
+    assert [row["name"] for row in client.get("/v1/nodes").json()] == ["build-01", "web-02"]
+
+
+def test_a_node_can_be_forgotten(client: TestClient):
+    client.post("/v1/nodes", json=NODE)
+    assert client.delete("/v1/nodes/build-01").status_code == 204
+    assert client.delete("/v1/nodes/build-01").status_code == 404
+
+
+def test_an_address_that_is_not_a_url_is_rejected(client: TestClient):
+    assert client.post("/v1/nodes", json={**NODE, "url": "build-01:7010"}).status_code == 422
+
+
+def test_health_says_which_warden_this_is(client: TestClient):
+    body = client.get("/health").json()
+    assert body["role"] == "hub"
+    assert body["nodes"] == 0
+    assert body["node"]
+
+
+def test_health_counts_the_nodes_it_knows(client: TestClient):
+    client.post("/v1/nodes", json=NODE)
+    assert client.get("/health").json()["nodes"] == 1
+
+
+def test_announcing_needs_the_cluster_token_not_the_api_one(settings: Settings):
+    guarded = settings.model_copy(update={"token": "human", "cluster_token": "between-wardens"})
+    with TestClient(create_app(guarded)) as client:
+        assert client.post("/v1/nodes", json=NODE).status_code == 401
+        human = {"Authorization": "Bearer human"}
+        assert client.post("/v1/nodes", json=NODE, headers=human).status_code == 401
+        cluster = {"Authorization": "Bearer between-wardens"}
+        assert client.post("/v1/nodes", json=NODE, headers=cluster).status_code == 201
+        # Reading the fleet is for people, so it takes the human token.
+        assert client.get("/v1/nodes", headers=cluster).status_code == 401
+        assert client.get("/v1/nodes", headers=human).status_code == 200

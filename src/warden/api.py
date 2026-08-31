@@ -12,17 +12,21 @@ from warden import __version__
 from warden.allocator import PortPool
 from warden.config import Settings
 from warden.errors import NotPermittedError, WardenError
+from warden.fleet import Fleet
 from warden.listeners import listeners, stop
 from warden.models import (
     ErrorResponse,
     HeartbeatRequest,
     Listener,
+    Node,
+    NodeAnnouncement,
     PoolStatus,
     Registration,
     RegistrationRequest,
 )
 from warden.service import Registry
 from warden.store import Store
+from warden.upstream import UpstreamReporter
 
 DESCRIPTION = """
 A single place that decides which local port a service runs on.
@@ -40,6 +44,13 @@ def get_manager(request: Request) -> Registry:
 Manager = Annotated[Registry, Depends(get_manager)]
 
 
+def get_fleet(request: Request) -> Fleet:
+    return request.app.state.fleet
+
+
+FleetDep = Annotated[Fleet, Depends(get_fleet)]
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
 
@@ -49,17 +60,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pool = PortPool(settings.pool_start, settings.pool_end, settings.reserved)
         app.state.settings = settings
         app.state.manager = Registry(store, pool, probe=settings.probe)
+        app.state.fleet = Fleet(store, ttl=settings.node_ttl)
+        # Reports in the background: a hub that is down must not hold up a node
+        # that is perfectly able to hand out ports on its own.
+        reporter = UpstreamReporter(settings)
+        reporter.start()
         try:
             yield
         finally:
+            await reporter.stop()
             store.close()
 
-    def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
-        if settings.token is None:
+    def _check(secret: str | None, authorization: str | None, what: str) -> None:
+        if secret is None:
             return
-        expected = f"Bearer {settings.token}"
-        if not authorization or not secrets.compare_digest(authorization, expected):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing API token")
+        if not authorization or not secrets.compare_digest(authorization, f"Bearer {secret}"):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid or missing {what}")
+
+    def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
+        _check(settings.token, authorization, "API token")
+
+    def cluster(authorization: Annotated[str | None, Header()] = None) -> None:
+        """Wardens talking to each other carry the cluster token, not a person's."""
+        _check(settings.cluster_token, authorization, "cluster token")
 
     app = FastAPI(
         title="Warden",
@@ -151,10 +174,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         stop(pid, force=force)
 
+    nodes = APIRouter(prefix="/v1/nodes", tags=["fleet"])
+
+    @nodes.post(
+        "",
+        summary="Announce a warden to this one",
+        dependencies=[Depends(cluster)],
+        status_code=status.HTTP_201_CREATED,
+        responses={status.HTTP_200_OK: {"description": "Node renewed"}},
+    )
+    def announce(
+        announcement: NodeAnnouncement, fleet: FleetDep, response: Response
+    ) -> Node:
+        node, created = fleet.announce(announcement)
+        response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return node
+
+    @nodes.get("", summary="Every warden this one knows", dependencies=[Depends(authorize)])
+    def list_nodes(fleet: FleetDep) -> list[Node]:
+        return fleet.nodes()
+
+    @nodes.delete(
+        "/{name}",
+        summary="Forget a warden",
+        dependencies=[Depends(authorize)],
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    def forget(name: str, fleet: FleetDep) -> None:
+        fleet.forget(name)
+
     app.include_router(v1)
+    app.include_router(nodes)
 
     @app.get("/health", summary="Liveness probe", tags=["meta"])
-    def health(manager: Manager) -> dict[str, object]:
-        return {"status": "ok", "version": __version__, "services": manager.store.count()}
+    def health(manager: Manager, fleet: FleetDep) -> dict[str, object]:
+        return {
+            "status": "ok",
+            "version": __version__,
+            "node": settings.node,
+            "role": settings.role,
+            "services": manager.store.count(),
+            "nodes": fleet.count(),
+        }
 
     return app
