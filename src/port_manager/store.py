@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS registrations (
     port       INTEGER NOT NULL,
     pid        INTEGER,
     meta       TEXT NOT NULL DEFAULT '{}',
+    ttl        INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     expires_at TEXT
@@ -26,6 +27,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS registrations_endpoint
 CREATE INDEX IF NOT EXISTS registrations_project
     ON registrations (project);
 """
+
+# Columns added after the first release, applied to databases that predate them.
+ADDED_COLUMNS = {"ttl": "INTEGER"}
 
 
 def _isoformat(value: datetime | None) -> str | None:
@@ -41,6 +45,7 @@ def _row_to_registration(row: sqlite3.Row) -> Registration:
         port=row["port"],
         pid=row["pid"],
         meta=json.loads(row["meta"]),
+        ttl=row["ttl"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
@@ -61,7 +66,15 @@ class Store:
         self._db.execute("PRAGMA foreign_keys = ON")
         with self._lock:
             self._db.executescript(SCHEMA)
+            self._add_missing_columns()
             self._db.commit()
+
+    def _add_missing_columns(self) -> None:
+        """Bring a database written by an older version up to the current schema."""
+        present = {row["name"] for row in self._db.execute("PRAGMA table_info(registrations)")}
+        for column, definition in ADDED_COLUMNS.items():
+            if column not in present:
+                self._db.execute(f"ALTER TABLE registrations ADD COLUMN {column} {definition}")
 
     def close(self) -> None:
         with self._lock:
@@ -120,9 +133,9 @@ class Store:
             self._db.execute(
                 """
                 INSERT INTO registrations
-                    (name, kind, project, host, port, pid, meta,
+                    (name, kind, project, host, port, pid, meta, ttl,
                      created_at, updated_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     kind = excluded.kind,
                     project = excluded.project,
@@ -130,6 +143,7 @@ class Store:
                     port = excluded.port,
                     pid = excluded.pid,
                     meta = excluded.meta,
+                    ttl = excluded.ttl,
                     updated_at = excluded.updated_at,
                     expires_at = excluded.expires_at
                 """,
@@ -141,6 +155,7 @@ class Store:
                     registration.port,
                     registration.pid,
                     json.dumps(registration.meta, separators=(",", ":")),
+                    registration.ttl,
                     _isoformat(registration.created_at),
                     _isoformat(registration.updated_at),
                     _isoformat(registration.expires_at),

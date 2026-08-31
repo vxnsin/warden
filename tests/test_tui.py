@@ -19,6 +19,7 @@ def registration(name: str, port: int, **kwargs) -> Registration:
         port=port,
         pid=kwargs.pop("pid", None),
         meta={},
+        ttl=kwargs.pop("ttl", None),
         created_at=now,
         updated_at=now,
         expires_at=kwargs.pop("expires_at", None),

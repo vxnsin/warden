@@ -17,6 +17,7 @@ def registration(name: str, port: int, **kwargs) -> Registration:
         port=port,
         pid=kwargs.pop("pid", None),
         meta=kwargs.pop("meta", {}),
+        ttl=kwargs.pop("ttl", None),
         created_at=now,
         updated_at=now,
         expires_at=kwargs.pop("expires_at", None),
@@ -72,3 +73,39 @@ def test_deleting_reports_whether_anything_was_removed(store: Store):
     store.save(registration("api", 8000))
     assert store.delete("api") is True
     assert store.delete("api") is False
+
+
+OLD_SCHEMA = """
+CREATE TABLE registrations (
+    name       TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    project    TEXT,
+    host       TEXT NOT NULL,
+    port       INTEGER NOT NULL,
+    pid        INTEGER,
+    meta       TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT
+);
+"""
+
+
+def test_a_database_from_an_older_version_keeps_its_registrations(tmp_path):
+    path = tmp_path / "old.db"
+    now = datetime.now(UTC).isoformat()
+    old = sqlite3.connect(path)
+    old.executescript(OLD_SCHEMA)
+    old.execute(
+        "INSERT INTO registrations (name, kind, host, port, meta, created_at, updated_at) "
+        "VALUES ('api', 'backend', '127.0.0.1', 8000, '{}', ?, ?)",
+        (now, now),
+    )
+    old.commit()
+    old.close()
+
+    with Store(path) as store:
+        registration = store.get("api")
+        assert registration is not None
+        assert registration.port == 8000
+        assert registration.ttl is None

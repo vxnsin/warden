@@ -116,3 +116,22 @@ def test_pool_status_counts_only_ports_inside_the_pool(manager: PortManager):
     manager.register(request("legacy", preferred_port=3000))
     status = manager.pool_status()
     assert (status.size, status.allocated, status.available) == (5, 1, 4)
+
+
+def test_a_heartbeat_without_a_ttl_renews_the_original_lease(manager: PortManager):
+    manager.register(request("api", ttl=60))
+    renewed = manager.heartbeat("api", HeartbeatRequest())
+    assert renewed.ttl == 60
+    assert renewed.expires_at is not None
+
+
+def test_a_heartbeat_can_shorten_a_lease(manager: PortManager):
+    manager.register(request("api", ttl=600))
+    renewed = manager.heartbeat("api", HeartbeatRequest(ttl=30))
+    assert renewed.ttl == 30
+
+
+def test_a_registration_without_a_ttl_never_expires(manager: PortManager):
+    registration, _ = manager.register(request("api"))
+    assert registration.ttl is None
+    assert manager.heartbeat("api", HeartbeatRequest()).expires_at is None

@@ -155,6 +155,7 @@ curl -s localhost:7010/v1/services \
   "port": 8000,
   "pid": null,
   "meta": {},
+  "ttl": null,
   "created_at": "2026-08-31T12:00:00Z",
   "updated_at": "2026-08-31T12:00:00Z",
   "expires_at": null
@@ -166,14 +167,16 @@ Failures come back as `{"detail": "..."}` with `404` for an unknown service,
 
 ## How a port is chosen
 
-1. A registration that already exists keeps its port, unless something else has
-   taken it meanwhile.
+1. A registration that already exists keeps its port, unless another registration
+   has taken it meanwhile.
 2. `preferred_port` is granted if it is free, and refused with `409` if it is not.
    It may sit outside the pool, which is how a legacy service on `3000` gets into
    the registry.
 3. Otherwise the lowest free port in the pool wins.
-4. Before a port is handed out it is tested for an existing listener, so anything
-   started outside the registry is skipped. `--no-probe` turns that off.
+4. Before a fresh port is handed out it is tested for an existing listener, so
+   anything started outside the registry is skipped. A service keeping its own
+   port is not probed, since it may still be bound to it. `--no-probe` turns the
+   test off entirely.
 
 Ports are tracked per host, so `10.0.0.5:8000` and `127.0.0.1:8000` are two
 different endpoints.
@@ -187,8 +190,10 @@ useful for test fixtures and CI, where nothing gets the chance to clean up:
 port-manager register ci-runner --kind worker --ttl 600
 ```
 
-`POST /v1/services/{name}/heartbeat` pushes the expiry out again. Expired
-registrations are dropped on the next request that touches the registry.
+`POST /v1/services/{name}/heartbeat` pushes the expiry out again. Sent without a
+`ttl` it renews the lease the service registered with, so a heartbeat can never
+turn a lease into a permanent registration by accident. Expired registrations are
+dropped on the next request that touches the registry.
 
 ## Configuration
 

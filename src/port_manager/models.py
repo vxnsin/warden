@@ -48,6 +48,7 @@ class Registration(BaseModel):
     port: int
     pid: int | None
     meta: dict[str, str]
+    ttl: int | None
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None

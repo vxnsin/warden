@@ -53,6 +53,7 @@ class PortManager:
             port=port,
             pid=request.pid,
             meta=request.meta,
+            ttl=request.ttl,
             created_at=existing.created_at if existing else now,
             updated_at=now,
             expires_at=now + timedelta(seconds=request.ttl) if request.ttl else None,
@@ -66,11 +67,15 @@ class PortManager:
     def heartbeat(self, name: str, request: HeartbeatRequest) -> Registration:
         now = utcnow()
         registration = self.get(name)
+        # A heartbeat without a ttl renews the lease the service registered with,
+        # rather than silently turning it into a permanent registration.
+        ttl = request.ttl if request.ttl is not None else registration.ttl
         updated = registration.model_copy(
             update={
                 "pid": request.pid if request.pid is not None else registration.pid,
+                "ttl": ttl,
                 "updated_at": now,
-                "expires_at": now + timedelta(seconds=request.ttl) if request.ttl else None,
+                "expires_at": now + timedelta(seconds=ttl) if ttl else None,
             }
         )
         self.store.save(updated)
