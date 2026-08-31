@@ -291,6 +291,9 @@ Wardens authenticate to each other with `WARDEN_CLUSTER_TOKEN`, which is separat
 from the `WARDEN_TOKEN` a person uses. Announcing takes the cluster token;
 reading the fleet takes the human one.
 
+[docs/fleet.md](docs/fleet.md) goes through the whole thing: what the hub keeps,
+what survives what, and why it is built this way.
+
 ## Configuration
 
 Every setting is an environment variable prefixed `WARDEN_`, or a line in a
