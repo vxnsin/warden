@@ -3,22 +3,22 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
-from port_manager.allocator import PortPool, is_bound
-from port_manager.errors import PoolExhaustedError, PortUnavailableError, UnknownServiceError
-from port_manager.models import (
+from warden.allocator import PortPool, is_bound
+from warden.errors import PoolExhaustedError, PortUnavailableError, UnknownServiceError
+from warden.models import (
     HeartbeatRequest,
     PoolStatus,
     Registration,
     RegistrationRequest,
 )
-from port_manager.store import Store
+from warden.store import Store
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-class PortManager:
+class Registry:
     """Hands out ports and keeps track of who holds them."""
 
     def __init__(self, store: Store, pool: PortPool, *, probe: bool = True) -> None:
@@ -98,6 +98,16 @@ class PortManager:
             available=usable - allocated,
         )
 
+    def _why_unavailable(self, host: str, port: int, taken: set[int]) -> str | None:
+        """The reason a port cannot be handed out, or None if it is free."""
+        if port in self.pool.reserved:
+            return f"port {port} is reserved"
+        if port in taken:
+            return f"port {port} is held by {self.store.owner_of(host, port)!r}"
+        if self.probe and is_bound(host, port):
+            return f"port {port} is already in use on {host}"
+        return None
+
     def _select_port(
         self, request: RegistrationRequest, existing: Registration | None
     ) -> int:
@@ -107,18 +117,16 @@ class PortManager:
         if holds:
             taken.discard(existing.port)
 
-        wanted = request.preferred_port
+        wanted = request.require_port if request.require_port else request.preferred_port
         if wanted is not None:
             if holds and existing.port == wanted:
                 return wanted
-            if wanted in self.pool.reserved:
-                raise PortUnavailableError(f"port {wanted} is reserved")
-            if wanted in taken:
-                owner = self.store.owner_of(host, wanted)
-                raise PortUnavailableError(f"port {wanted} is held by {owner!r}")
-            if self.probe and is_bound(host, wanted):
-                raise PortUnavailableError(f"port {wanted} is already in use on {host}")
-            return wanted
+            problem = self._why_unavailable(host, wanted, taken)
+            if problem is None:
+                return wanted
+            if request.require_port is not None:
+                raise PortUnavailableError(problem)
+            # Only a preference: fall back to the pool rather than refuse the service.
 
         # Keep a service on the port it had, so restarts do not move it around.
         if holds and existing.port not in taken and existing.port not in self.pool.reserved:

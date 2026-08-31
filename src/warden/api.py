@@ -8,19 +8,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
-from port_manager import __version__
-from port_manager.allocator import PortPool
-from port_manager.config import Settings
-from port_manager.errors import PortManagerError
-from port_manager.models import (
+from warden import __version__
+from warden.allocator import PortPool
+from warden.config import Settings
+from warden.errors import WardenError
+from warden.models import (
     ErrorResponse,
     HeartbeatRequest,
     PoolStatus,
     Registration,
     RegistrationRequest,
 )
-from port_manager.service import PortManager
-from port_manager.store import Store
+from warden.service import Registry
+from warden.store import Store
 
 DESCRIPTION = """
 A single place that decides which local port a service runs on.
@@ -31,11 +31,11 @@ lands on a port a neighbouring service has meanwhile taken.
 """
 
 
-def get_manager(request: Request) -> PortManager:
+def get_manager(request: Request) -> Registry:
     return request.app.state.manager
 
 
-Manager = Annotated[PortManager, Depends(get_manager)]
+Manager = Annotated[Registry, Depends(get_manager)]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -46,7 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store = Store(settings.database)
         pool = PortPool(settings.pool_start, settings.pool_end, settings.reserved)
         app.state.settings = settings
-        app.state.manager = PortManager(store, pool, probe=settings.probe)
+        app.state.manager = Registry(store, pool, probe=settings.probe)
         try:
             yield
         finally:
@@ -60,15 +60,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing API token")
 
     app = FastAPI(
-        title="Port Manager",
-        summary="Central port registry for local development services.",
+        title="Warden",
+        summary="Nothing binds a port without asking. A registry that hands out local ports.",
         description=DESCRIPTION,
         version=__version__,
         lifespan=lifespan,
     )
 
-    @app.exception_handler(PortManagerError)
-    async def _handle(_request: Request, exc: PortManagerError) -> JSONResponse:
+    @app.exception_handler(WardenError)
+    async def _handle(_request: Request, exc: WardenError) -> JSONResponse:
         return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
 
     v1 = APIRouter(prefix="/v1", dependencies=[Depends(authorize)])

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 Name = Annotated[
     str,
@@ -28,9 +28,16 @@ class RegistrationRequest(BaseModel):
     project: Project | None = None
     host: str = "127.0.0.1"
     preferred_port: Port | None = None
+    require_port: Port | None = None
     pid: int | None = Field(default=None, ge=1)
     ttl: int | None = Field(default=None, ge=1, le=86_400)
     meta: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _one_wish_at_a_time(self) -> RegistrationRequest:
+        if self.preferred_port is not None and self.require_port is not None:
+            raise ValueError("set either preferred_port or require_port, not both")
+        return self
 
 
 class HeartbeatRequest(BaseModel):

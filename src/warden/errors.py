@@ -1,4 +1,4 @@
-class PortManagerError(Exception):
+class WardenError(Exception):
     """Base class for errors that map onto an HTTP response."""
 
     status_code = 500
@@ -8,13 +8,13 @@ class PortManagerError(Exception):
         self.message = message
 
 
-class UnknownServiceError(PortManagerError):
+class UnknownServiceError(WardenError):
     status_code = 404
 
 
-class PortUnavailableError(PortManagerError):
+class PortUnavailableError(WardenError):
     status_code = 409
 
 
-class PoolExhaustedError(PortManagerError):
+class PoolExhaustedError(WardenError):
     status_code = 503

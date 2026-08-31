@@ -3,8 +3,9 @@ from datetime import UTC, datetime, timedelta
 
 from textual.widgets import DataTable, Static
 
-from port_manager.models import PoolStatus, Registration
-from port_manager.tui import PortManagerApp, _age, _expiry
+from warden import theme
+from warden.models import PoolStatus, Registration
+from warden.tui import BANNER_MIN_HEIGHT, WardenApp, _address, _age, _lease
 
 POOL = PoolStatus(start=8000, end=8004, size=5, reserved=[8004], allocated=2, available=2)
 
@@ -36,14 +37,19 @@ class StubClient:
         return POOL
 
 
-def run_app(scenario) -> None:
+def run_app(scenario, size=(120, 40)) -> None:
     async def main() -> None:
-        app = PortManagerApp(StubClient(), interval=3600)
-        async with app.run_test() as pilot:
+        app = WardenApp(StubClient(), interval=3600)
+        async with app.run_test(size=size) as pilot:
             await pilot.pause()
             await scenario(app, pilot)
 
     asyncio.run(main())
+
+
+def test_the_banner_rows_all_have_the_same_width():
+    widths = {len(line) for line in theme.BANNER.splitlines()}
+    assert len(widths) == 1
 
 
 def test_ages_are_shown_in_the_largest_useful_unit():
@@ -54,20 +60,42 @@ def test_ages_are_shown_in_the_largest_useful_unit():
     assert _age(now - timedelta(days=5)) == "5d ago"
 
 
-def test_a_registration_without_a_lease_never_expires():
-    assert _expiry(None) == "never"
+def test_a_registration_without_a_lease_says_so_quietly():
+    lease = _lease(None)
+    assert lease.plain == "none"
+    assert lease.style == theme.BONE_DIM
 
 
-def test_a_lapsed_lease_is_marked_expired():
-    assert _expiry(datetime.now(UTC) - timedelta(seconds=1)) == "expired"
+def test_a_lapsed_lease_is_marked_in_ember():
+    lease = _lease(datetime.now(UTC) - timedelta(seconds=1))
+    assert lease.plain == "expired"
+    assert lease.style == theme.EMBER
 
 
-def test_a_running_lease_counts_down():
-    assert _expiry(datetime.now(UTC) + timedelta(minutes=5)) == "in 5m"
+def test_a_lease_about_to_run_out_turns_amber():
+    lease = _lease(datetime.now(UTC) + timedelta(seconds=30))
+    assert lease.plain.endswith("s left")
+    assert lease.style == theme.SHRIEKER
+
+
+def test_a_healthy_lease_counts_down_in_minutes():
+    assert _lease(datetime.now(UTC) + timedelta(minutes=5)).plain == "5m left"
+
+
+def test_the_port_is_the_lit_part_of_an_address():
+    address = _address(registration("api", 8000))
+    assert address.plain == "127.0.0.1:8000"
+    assert any(span.style == theme.GLOW for span in address.spans)
+
+
+def test_each_kind_of_service_gets_its_own_colour():
+    assert theme.kind_colour("backend") == theme.GLOW
+    assert theme.kind_colour("frontend") == theme.AMETHYST
+    assert theme.kind_colour("anything-else") == theme.BONE_DIM
 
 
 def test_every_registration_gets_a_row():
-    async def scenario(app: PortManagerApp, _pilot) -> None:
+    async def scenario(app: WardenApp, _pilot) -> None:
         app.show([registration("api", 8000), registration("web", 8001)], POOL)
         table = app.query_one(DataTable)
         assert table.row_count == 2
@@ -76,21 +104,51 @@ def test_every_registration_gets_a_row():
     run_app(scenario)
 
 
-def test_the_summary_reports_pool_usage():
-    async def scenario(app: PortManagerApp, _pilot) -> None:
+def test_the_stats_line_reports_pool_usage():
+    async def scenario(app: WardenApp, _pilot) -> None:
         app.show([registration("api", 8000)], POOL)
-        summary = app.query_one("#summary", Static)
-        assert "2 allocated" in str(summary.content)
-        assert "8000-8004" in str(summary.content)
+        stats = str(app.query_one("#stats", Static).content)
+        assert "8000-8004" in stats
+        assert "2 held" in stats
+        assert "2 free" in stats
+        assert "1 reserved" in stats
 
     run_app(scenario)
 
 
-def test_an_unreachable_registry_is_shown_instead_of_a_table():
-    async def scenario(app: PortManagerApp, _pilot) -> None:
-        app.show_error("no Port Manager reachable")
-        summary = app.query_one("#summary", Static)
-        assert summary.has_class("-error")
-        assert "no Port Manager reachable" in str(summary.content)
+def test_an_unreachable_warden_is_shown_instead_of_a_table():
+    async def scenario(app: WardenApp, _pilot) -> None:
+        app.show_error("no warden reachable")
+        stats = app.query_one("#stats", Static)
+        assert stats.has_class("-error")
+        assert "no warden reachable" in str(stats.content)
 
     run_app(scenario)
+
+
+def test_the_banner_is_shown_on_a_tall_terminal():
+    async def scenario(app: WardenApp, _pilot) -> None:
+        assert app.query_one("#banner", Static).display is True
+
+    run_app(scenario, size=(120, BANNER_MIN_HEIGHT))
+
+
+def test_the_banner_gives_way_to_the_table_on_a_short_terminal():
+    async def scenario(app: WardenApp, _pilot) -> None:
+        assert app.query_one("#banner", Static).display is False
+
+    run_app(scenario, size=(120, BANNER_MIN_HEIGHT - 1))
+
+
+def test_the_banner_keeps_its_blocks_on_a_utf8_console():
+    assert "█" in theme.banner_for("utf-8")
+
+
+def test_the_banner_falls_back_where_blocks_cannot_be_printed():
+    fallback = theme.banner_for("cp1252")
+    assert "█" not in fallback
+    assert fallback.splitlines()[0].strip().startswith("#")
+
+
+def test_an_unknown_encoding_does_not_crash_the_banner():
+    assert theme.banner_for("not-a-real-codec")

@@ -31,12 +31,12 @@ PortSet = Annotated[set[int], BeforeValidator(_parse_ports)]
 
 
 def default_database() -> Path:
-    return user_data_path("port-manager", appauthor=False) / "registry.db"
+    return user_data_path("warden", appauthor=False) / "registry.db"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="PORT_MANAGER_",
+        env_prefix="WARDEN_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",

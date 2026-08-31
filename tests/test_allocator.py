@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from port_manager.allocator import PortPool, is_bound
+from warden.allocator import PortPool, is_bound
 
 
 def _free_port() -> int:

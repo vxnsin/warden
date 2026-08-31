@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from port_manager.models import Registration
-from port_manager.store import Store
+from warden.models import Registration
+from warden.store import Store
 
 
 def registration(name: str, port: int, **kwargs) -> Registration:

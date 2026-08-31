@@ -6,7 +6,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from port_manager.models import Registration
+from warden.models import Registration
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS registrations (

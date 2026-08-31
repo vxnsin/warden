@@ -3,8 +3,8 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from port_manager.api import create_app
-from port_manager.config import Settings
+from warden.api import create_app
+from warden.config import Settings
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def test_an_unknown_service_is_a_404(client: TestClient):
 def test_a_taken_port_is_a_409(client: TestClient):
     client.post("/v1/services", json={"name": "api", "kind": "backend"})
     response = client.post(
-        "/v1/services", json={"name": "web", "kind": "frontend", "preferred_port": 8000}
+        "/v1/services", json={"name": "web", "kind": "frontend", "require_port": 8000}
     )
     assert response.status_code == 409
 
@@ -108,3 +108,20 @@ def test_a_token_protects_the_registry(settings: Settings):
         authorized = client.get("/v1/services", headers={"Authorization": "Bearer secret"})
         assert authorized.status_code == 200
         assert client.get("/health").status_code == 200
+
+
+def test_a_wished_for_port_falls_back_when_it_is_taken(client: TestClient):
+    client.post("/v1/services", json={"name": "api", "kind": "backend"})
+    response = client.post(
+        "/v1/services", json={"name": "web", "kind": "frontend", "preferred_port": 8000}
+    )
+    assert response.status_code == 201
+    assert response.json()["port"] == 8001
+
+
+def test_a_wish_and_a_demand_together_are_rejected(client: TestClient):
+    response = client.post(
+        "/v1/services",
+        json={"name": "api", "kind": "backend", "preferred_port": 8000, "require_port": 8001},
+    )
+    assert response.status_code == 422

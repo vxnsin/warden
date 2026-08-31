@@ -6,16 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from port_manager.allocator import PortPool
-from port_manager.config import Settings
-from port_manager.service import PortManager
-from port_manager.store import Store
+from warden.allocator import PortPool
+from warden.config import Settings
+from warden.service import Registry
+from warden.store import Store
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in list(os.environ):
-        if name.startswith("PORT_MANAGER_"):
+        if name.startswith("WARDEN_"):
             monkeypatch.delenv(name, raising=False)
 
 
@@ -26,8 +26,8 @@ def store() -> Iterator[Store]:
 
 
 @pytest.fixture
-def manager(store: Store) -> PortManager:
-    return PortManager(store, PortPool(8000, 8004), probe=False)
+def manager(store: Store) -> Registry:
+    return Registry(store, PortPool(8000, 8004), probe=False)
 
 
 @pytest.fixture

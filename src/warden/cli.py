@@ -7,39 +7,39 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
-from port_manager import __version__
-from port_manager.client import PortManagerClient
-from port_manager.config import Settings
-from port_manager.errors import PortManagerError
-from port_manager.models import Registration
+from warden import __version__, theme
+from warden.client import WardenClient
+from warden.config import Settings
+from warden.errors import WardenError
+from warden.models import Registration
 
 app = typer.Typer(
     add_completion=False,
-    no_args_is_help=True,
-    help="Central port registry for local development services.",
+    help="Nothing binds a port without asking. A registry that hands out local ports.",
 )
 console = Console()
 errors = Console(stderr=True)
 
 UrlOption = Annotated[
     str | None,
-    typer.Option("--url", "-u", help="Base URL of the registry.", envvar="PORT_MANAGER_URL"),
+    typer.Option("--url", "-u", help="Base URL of the registry.", envvar="WARDEN_URL"),
 ]
 TokenOption = Annotated[
     str | None,
     typer.Option("--token", help="API token, if the registry requires one.",
-                 envvar="PORT_MANAGER_TOKEN"),
+                 envvar="WARDEN_TOKEN"),
 ]
 JsonOption = Annotated[bool, typer.Option("--json", help="Print raw JSON.")]
 
 
-def _client(url: str | None, token: str | None) -> PortManagerClient:
-    return PortManagerClient(url, token=token)
+def _client(url: str | None, token: str | None) -> WardenClient:
+    return WardenClient(url, token=token)
 
 
-def _fail(exc: PortManagerError) -> typer.Exit:
-    errors.print(f"[red]{exc.message}[/red]")
+def _fail(exc: WardenError) -> typer.Exit:
+    errors.print(exc.message, style=theme.EMBER)
     return typer.Exit(1)
 
 
@@ -47,29 +47,39 @@ def _dump(payload: object) -> None:
     console.print_json(json.dumps(payload, default=str))
 
 
+def _address(service: Registration) -> Text:
+    text = Text(f"{service.host}:", style=theme.BONE_DIM)
+    text.append(str(service.port), style=theme.GLOW)
+    return text
+
+
 def _table(services: list[Registration]) -> Table:
-    table = Table(box=None, pad_edge=False, header_style="bold")
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
     for column in ("SERVICE", "KIND", "PROJECT", "ADDRESS", "PID"):
         table.add_column(column)
     for service in services:
         table.add_row(
             service.name,
-            service.kind,
-            service.project or "-",
-            service.address,
-            str(service.pid) if service.pid else "-",
+            Text(service.kind, style=theme.kind_colour(service.kind)),
+            Text(service.project or "-", style=theme.BONE_DIM),
+            _address(service),
+            Text(str(service.pid) if service.pid else "-", style=theme.BONE_DIM),
         )
     return table
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def root(
+    ctx: typer.Context,
     version: Annotated[
         bool, typer.Option("--version", is_eager=True, help="Print the version and exit.")
     ] = False,
 ) -> None:
     if version:
         console.print(__version__)
+        raise typer.Exit
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
         raise typer.Exit
 
 
@@ -91,7 +101,7 @@ def serve(
     """Run the registry."""
     import uvicorn
 
-    from port_manager.api import create_app
+    from warden.api import create_app
 
     overrides: dict[str, object] = {}
     if host is not None:
@@ -110,10 +120,16 @@ def serve(
         overrides["pool_end"] = int(end or start)
 
     settings = Settings(**overrides)
+    console.print(theme.banner_for(getattr(console.file, "encoding", None)), style=theme.GLOW)
+    console.print(theme.TAGLINE, style=theme.BONE_DIM)
+    console.print()
+    console.print(f"v{__version__}  listening on {settings.url}", style=theme.BONE_DIM)
     console.print(
-        f"port-manager {__version__} on [bold]{settings.url}[/bold] "
-        f"handing out {settings.pool_start}-{settings.pool_end}"
+        f"pool {settings.pool_start}-{settings.pool_end}"
+        f"  {len(settings.reserved)} reserved",
+        style=theme.BONE_DIM,
     )
+    console.print()
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="info")
 
 
@@ -124,7 +140,7 @@ def tui(
     interval: Annotated[float, typer.Option(help="Refresh interval in seconds.")] = 2.0,
 ) -> None:
     """Open the terminal dashboard."""
-    from port_manager.tui import run
+    from warden.tui import run
 
     run(url, token=token, interval=interval)
 
@@ -141,14 +157,14 @@ def list_services(
     with _client(url, token) as client:
         try:
             services = client.services(project=project, kind=kind)
-        except PortManagerError as exc:
+        except WardenError as exc:
             raise _fail(exc) from exc
     if as_json:
         _dump([service.model_dump(mode="json") for service in services])
     elif services:
         console.print(_table(services))
     else:
-        console.print("[dim]nothing registered[/dim]")
+        console.print("nothing registered", style=theme.BONE_DIM)
 
 
 @app.command()
@@ -162,7 +178,7 @@ def get(
     with _client(url, token) as client:
         try:
             service = client.lookup(name)
-        except PortManagerError as exc:
+        except WardenError as exc:
             raise _fail(exc) from exc
     if as_json:
         _dump(service.model_dump(mode="json"))
@@ -177,7 +193,12 @@ def register(
     project: Annotated[str | None, typer.Option(help="Group services of one project.")] = None,
     host: Annotated[str, typer.Option(help="Interface the service will bind to.")] = "127.0.0.1",
     preferred_port: Annotated[
-        int | None, typer.Option(help="Ask for a specific port instead of the next free one.")
+        int | None,
+        typer.Option(help="Wish for this port, but take another one if it is not free."),
+    ] = None,
+    require_port: Annotated[
+        int | None,
+        typer.Option(help="Insist on this port, and fail if it is not free."),
     ] = None,
     ttl: Annotated[
         int | None, typer.Option(help="Release the port again after this many seconds.")
@@ -196,10 +217,11 @@ def register(
                 project=project,
                 host=host,
                 preferred_port=preferred_port,
+                require_port=require_port,
                 ttl=ttl,
                 pid=pid,
             )
-        except PortManagerError as exc:
+        except WardenError as exc:
             raise _fail(exc) from exc
     if as_json:
         _dump(service.model_dump(mode="json"))
@@ -213,7 +235,7 @@ def release(name: str, url: UrlOption = None, token: TokenOption = None) -> None
     with _client(url, token) as client:
         try:
             client.release(name)
-        except PortManagerError as exc:
+        except WardenError as exc:
             raise _fail(exc) from exc
     console.print(f"released {name}")
 
@@ -224,7 +246,7 @@ def pool(url: UrlOption = None, token: TokenOption = None, as_json: JsonOption =
     with _client(url, token) as client:
         try:
             status = client.pool()
-        except PortManagerError as exc:
+        except WardenError as exc:
             raise _fail(exc) from exc
     if as_json:
         _dump(status.model_dump(mode="json"))

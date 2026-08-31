@@ -8,16 +8,16 @@ from typing import Any
 
 import httpx
 
-from port_manager.config import DEFAULT_URL
-from port_manager.errors import (
+from warden.config import DEFAULT_URL
+from warden.errors import (
     PoolExhaustedError,
-    PortManagerError,
     PortUnavailableError,
     UnknownServiceError,
+    WardenError,
 )
-from port_manager.models import PoolStatus, Registration
+from warden.models import PoolStatus, Registration
 
-_STATUS_ERRORS: dict[int, type[PortManagerError]] = {
+_STATUS_ERRORS: dict[int, type[WardenError]] = {
     404: UnknownServiceError,
     409: PortUnavailableError,
     503: PoolExhaustedError,
@@ -25,7 +25,7 @@ _STATUS_ERRORS: dict[int, type[PortManagerError]] = {
 
 
 def resolve_url(url: str | None = None) -> str:
-    return (url or os.environ.get("PORT_MANAGER_URL") or DEFAULT_URL).rstrip("/")
+    return (url or os.environ.get("WARDEN_URL") or DEFAULT_URL).rstrip("/")
 
 
 def _detail(response: httpx.Response) -> str:
@@ -37,8 +37,8 @@ def _detail(response: httpx.Response) -> str:
     return detail if isinstance(detail, str) else str(detail or body)
 
 
-class PortManagerClient:
-    """Talks to a running Port Manager."""
+class WardenClient:
+    """Talks to a running warden."""
 
     def __init__(
         self,
@@ -47,7 +47,7 @@ class PortManagerClient:
         token: str | None = None,
         timeout: float = 5.0,
     ) -> None:
-        token = token or os.environ.get("PORT_MANAGER_TOKEN")
+        token = token or os.environ.get("WARDEN_TOKEN")
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._http = httpx.Client(base_url=resolve_url(url), timeout=timeout, headers=headers)
 
@@ -58,7 +58,7 @@ class PortManagerClient:
     def close(self) -> None:
         self._http.close()
 
-    def __enter__(self) -> PortManagerClient:
+    def __enter__(self) -> WardenClient:
         return self
 
     def __exit__(
@@ -77,6 +77,7 @@ class PortManagerClient:
         project: str | None = None,
         host: str = "127.0.0.1",
         preferred_port: int | None = None,
+        require_port: int | None = None,
         pid: int | None = None,
         ttl: int | None = None,
         meta: dict[str, str] | None = None,
@@ -87,6 +88,7 @@ class PortManagerClient:
             "project": project,
             "host": host,
             "preferred_port": preferred_port,
+            "require_port": require_port,
             "pid": pid,
             "ttl": ttl,
             "meta": meta or {},
@@ -124,18 +126,18 @@ class PortManagerClient:
         try:
             yield registration
         finally:
-            with suppress(PortManagerError):
+            with suppress(WardenError):
                 self.release(name)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         try:
             response = self._http.request(method, path, **kwargs)
         except httpx.ConnectError as exc:
-            raise PortManagerError(
-                f"no Port Manager reachable at {self.url} - start one with 'port-manager serve'"
+            raise WardenError(
+                f"no warden reachable at {self.url} - start one with 'warden serve'"
             ) from exc
         if response.is_error:
-            raise _STATUS_ERRORS.get(response.status_code, PortManagerError)(_detail(response))
+            raise _STATUS_ERRORS.get(response.status_code, WardenError)(_detail(response))
         if response.status_code == httpx.codes.NO_CONTENT:
             return None
         return response.json()
@@ -143,7 +145,7 @@ class PortManagerClient:
 
 def register(name: str, *, kind: str, url: str | None = None, **kwargs: Any) -> int:
     """Register a service and return the port it should listen on."""
-    with PortManagerClient(url) as client:
+    with WardenClient(url) as client:
         return client.register(name, kind=kind, **kwargs).port
 
 
@@ -151,7 +153,7 @@ def register(name: str, *, kind: str, url: str | None = None, **kwargs: Any) -> 
 def reserve(name: str, *, kind: str, url: str | None = None, **kwargs: Any) -> Iterator[int]:
     """Hold a port for the duration of the block and release it afterwards."""
     with (
-        PortManagerClient(url) as client,
+        WardenClient(url) as client,
         client.session(name, kind=kind, **kwargs) as registration,
     ):
         yield registration.port

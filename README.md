@@ -1,45 +1,48 @@
-<img src="assets/wordmark.svg" alt="port-manager" width="280">
+<img src="assets/wordmark.svg" alt="warden" width="260">
 
-One place that decides which local port a service runs on.
+**Nothing binds a port without asking.**
 
-Services register under a name, say what they are, and get a port back. The same
-name keeps the same port across restarts, so a backend never wakes up on the port
-its frontend grabbed while it was down.
+One place that decides which local port a service runs on. Services register
+under a name, say what they are, and get a port back. The same name keeps the
+same port across restarts, so a backend never wakes up on the port its frontend
+grabbed while it was down.
+
+<img src="assets/tui.svg" alt="The warden dashboard" width="900">
 
 ## Why
 
-On a machine that runs a handful of projects, ports are picked by hand and written
-down in three places: a `.env`, a `vite.config.ts`, and someone's memory. Two
-services eventually pick 8080 and the second one fails to start — or worse, starts
-and talks to the wrong neighbour.
+On a machine that runs a handful of projects, ports are picked by hand and
+written down in three places: a `.env`, a `vite.config.ts`, and someone's memory.
+Two services eventually pick 8080 and the second one fails to start — or worse,
+starts and talks to the wrong neighbour.
 
-`port-manager` replaces that with a registry:
+`warden` replaces that with a registry:
 
 - every service asks for a port instead of hardcoding one
-- ports are handed out from a single pool, so two services cannot collide
+- ports come from a single pool, so two services cannot collide
 - a service keeps its port across restarts
 - ports already occupied by something outside the registry are skipped
-- `port-manager ls` answers "what is running on 8003?"
+- `warden ls` answers "what is running on 8003?"
 
 ## Install
 
 ```sh
-uv tool install port-manager
+uv tool install warden
 ```
 
 Or run it without installing:
 
 ```sh
-uvx port-manager serve
+uvx warden serve
 ```
 
 From a checkout:
 
 ```sh
-git clone https://github.com/vxnsin/port-manager
-cd port-manager
+git clone https://github.com/vxnsin/warden
+cd warden
 uv sync
-uv run port-manager serve
+uv run warden serve
 ```
 
 ## Quick start
@@ -47,22 +50,22 @@ uv run port-manager serve
 Start the registry — it listens on `127.0.0.1:7010` and hands out `8000-8999`:
 
 ```sh
-port-manager serve
+warden serve
 ```
 
 Claim a port:
 
 ```sh
-$ port-manager register shop-api --kind backend --project shop
+$ warden register shop-api --kind backend --project shop
 8000
-$ port-manager register shop-web --kind frontend --project shop
+$ warden register shop-web --kind frontend --project shop
 8001
 ```
 
 See who holds what:
 
 ```sh
-$ port-manager ls
+$ warden ls
 SERVICE   KIND      PROJECT  ADDRESS         PID
 shop-api  backend   shop     127.0.0.1:8000  -
 shop-web  frontend  shop     127.0.0.1:8001  -
@@ -71,20 +74,37 @@ shop-web  frontend  shop     127.0.0.1:8001  -
 Give a port back:
 
 ```sh
-port-manager release shop-web
+warden release shop-web
 ```
+
+## Asking for a particular port
+
+Two different wishes, two different fields:
+
+```sh
+# "I would like 3000, but anything free will do."
+warden register shop-web --kind frontend --preferred-port 3000
+
+# "It has to be 3000, this port is hardcoded in a config I cannot change."
+warden register legacy-crm --kind backend --require-port 3000
+```
+
+`--preferred-port` falls back to the pool when the port is taken, reserved, or
+already in use. `--require-port` fails with `409` instead. Both may name a port
+outside the pool, which is how a legacy service on `3000` joins the registry.
 
 ## Dashboard
 
 ```sh
-port-manager tui
+warden tui
 ```
 
 A live table of every registration, refreshed every two seconds.
 
 | Key | Action |
 | --- | --- |
-| `r` | Refresh now |
+| `↑` `↓` `j` `k` | Move |
+| `r` | Reload now |
 | `d` | Release the selected service |
 | `q` | Quit |
 
@@ -94,7 +114,7 @@ The package ships a client, so a service can ask for its own port at startup:
 
 ```python
 import uvicorn
-from port_manager import register
+from warden import register
 
 port = register("shop-api", kind="backend", project="shop")
 uvicorn.run(app, port=port)
@@ -103,9 +123,9 @@ uvicorn.run(app, port=port)
 Look up a neighbour instead of hardcoding its address:
 
 ```python
-from port_manager import PortManagerClient
+from warden import WardenClient
 
-with PortManagerClient() as client:
+with WardenClient() as client:
     backend = client.lookup("shop-api")
     base_url = f"http://{backend.address}"
 ```
@@ -113,7 +133,7 @@ with PortManagerClient() as client:
 For short-lived processes, `reserve` hands the port back on the way out:
 
 ```python
-from port_manager import reserve
+from warden import reserve
 
 with reserve("test-fixture", kind="worker") as port:
     run_server(port)
@@ -122,7 +142,7 @@ with reserve("test-fixture", kind="worker") as port:
 ## From the shell
 
 ```sh
-PORT=$(port-manager register shop-api --kind backend)
+PORT=$(warden register shop-api --kind backend)
 exec ./server --port "$PORT"
 ```
 
@@ -163,17 +183,17 @@ curl -s localhost:7010/v1/services \
 ```
 
 Failures come back as `{"detail": "..."}` with `404` for an unknown service,
-`409` when a requested port is taken, and `503` when the pool is full.
+`409` when a required port is taken, and `503` when the pool is full.
 
 ## How a port is chosen
 
-1. A registration that already exists keeps its port, unless another registration
-   has taken it meanwhile.
-2. `preferred_port` is granted if it is free, and refused with `409` if it is not.
-   It may sit outside the pool, which is how a legacy service on `3000` gets into
-   the registry.
-3. Otherwise the lowest free port in the pool wins.
-4. Before a fresh port is handed out it is tested for an existing listener, so
+1. A registration that already exists keeps its port, unless another
+   registration has taken it meanwhile.
+2. `require_port` is granted if it is free and refused with `409` if it is not.
+3. `preferred_port` is granted if it is free, and otherwise quietly gives way to
+   the pool.
+4. Otherwise the lowest free port in the pool wins.
+5. Before a fresh port is handed out it is tested for an existing listener, so
    anything started outside the registry is skipped. A service keeping its own
    port is not probed, since it may still be bound to it. `--no-probe` turns the
    test off entirely.
@@ -187,7 +207,7 @@ A registration lasts until it is released. Pass `ttl` to make it expire instead 
 useful for test fixtures and CI, where nothing gets the chance to clean up:
 
 ```sh
-port-manager register ci-runner --kind worker --ttl 600
+warden register ci-runner --kind worker --ttl 600
 ```
 
 `POST /v1/services/{name}/heartbeat` pushes the expiry out again. Sent without a
@@ -197,23 +217,41 @@ dropped on the next request that touches the registry.
 
 ## Configuration
 
-Every setting is an environment variable prefixed `PORT_MANAGER_`, or a line in a
+Every setting is an environment variable prefixed `WARDEN_`, or a line in a
 `.env` file next to the process.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PORT_MANAGER_HOST` | `127.0.0.1` | Interface the registry listens on |
-| `PORT_MANAGER_PORT` | `7010` | Port the registry listens on |
-| `PORT_MANAGER_POOL_START` | `8000` | First port that may be handed out |
-| `PORT_MANAGER_POOL_END` | `8999` | Last port that may be handed out |
-| `PORT_MANAGER_RESERVED` | empty | Ports to keep out, e.g. `8080,8443,9000-9010` |
-| `PORT_MANAGER_DATABASE` | platform data dir | SQLite file holding the registry |
-| `PORT_MANAGER_PROBE` | `true` | Test ports for existing listeners |
-| `PORT_MANAGER_TOKEN` | empty | Require `Authorization: Bearer <token>` |
-| `PORT_MANAGER_URL` | `http://127.0.0.1:7010` | Registry the client and CLI talk to |
+| `WARDEN_HOST` | `127.0.0.1` | Interface the registry listens on |
+| `WARDEN_PORT` | `7010` | Port the registry listens on |
+| `WARDEN_POOL_START` | `8000` | First port that may be handed out |
+| `WARDEN_POOL_END` | `8999` | Last port that may be handed out |
+| `WARDEN_RESERVED` | empty | Ports to keep out, e.g. `8080,8443,9000-9010` |
+| `WARDEN_DATABASE` | platform data dir | SQLite file holding the registry |
+| `WARDEN_PROBE` | `true` | Test ports for existing listeners |
+| `WARDEN_TOKEN` | empty | Require `Authorization: Bearer <token>` |
+| `WARDEN_URL` | `http://127.0.0.1:7010` | Registry the client and CLI talk to |
 
 The registry binds to loopback and has no authentication by default. Set a token
 before binding it to anything else.
+
+## Colours
+
+The palette lives in `warden/theme.py`, so the dashboard, the CLI and this page
+never drift apart.
+
+| Role | Colour | |
+| --- | --- | --- |
+| Ground | `#08100f` | sculk black |
+| Surface | `#0e1a1c` | panels and table |
+| Border | `#1e3538` | |
+| Text | `#d9e4e2` | |
+| Muted | `#6d8687` | labels, empty cells |
+| Live | `#2be0d6` | ports, focus, the banner |
+| `frontend` | `#a87fe0` | |
+| `worker` | `#e0b457` | also a lease about to run out |
+| `database` | `#4fd98c` | also free capacity |
+| Conflict | `#e5544b` | expired leases, errors |
 
 ## Development
 
