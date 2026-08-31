@@ -18,3 +18,19 @@ class PortUnavailableError(WardenError):
 
 class PoolExhaustedError(WardenError):
     status_code = 503
+
+
+class UnknownProcessError(WardenError):
+    status_code = 404
+
+
+class NotPermittedError(WardenError):
+    status_code = 403
+
+
+class ProtectedProcessError(WardenError):
+    status_code = 403
+
+
+class StillRunningError(WardenError):
+    status_code = 409

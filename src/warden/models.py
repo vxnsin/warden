@@ -65,6 +65,23 @@ class Registration(BaseModel):
         return f"{self.host}:{self.port}"
 
 
+class Listener(BaseModel):
+    """A socket bound on this machine, whether warden handed it out or not."""
+
+    protocol: str
+    host: str
+    port: int
+    pid: int | None
+    process: str | None
+    user: str | None
+    started_at: datetime | None
+    command: str | None
+
+    @property
+    def address(self) -> str:
+        return f"{self.host}:{self.port}"
+
+
 class PoolStatus(BaseModel):
     start: int
     end: int
