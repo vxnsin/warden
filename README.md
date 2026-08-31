@@ -189,6 +189,9 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | `DELETE` | `/v1/services/{name}` | Release a port |
 | `GET` | `/v1/listeners` | Every socket bound on that machine |
 | `DELETE` | `/v1/listeners/{pid}` | Stop a process, off unless `WARDEN_ALLOW_KILL` |
+| `POST` | `/v1/nodes` | A warden announces itself, cluster token |
+| `GET` | `/v1/nodes` | Every warden this one knows |
+| `DELETE` | `/v1/nodes/{name}` | Forget a warden |
 
 ```sh
 curl -s localhost:7010/v1/services \
@@ -245,6 +248,49 @@ warden register ci-runner --kind worker --ttl 600
 turn a lease into a permanent registration by accident. Expired registrations are
 dropped on the next request that touches the registry.
 
+## More than one machine
+
+A warden can report to another one. The hub then knows every node, what range it
+hands out and whether it is still answering:
+
+```sh
+# on the hub
+WARDEN_CLUSTER_TOKEN=... warden serve
+
+# on each other machine
+WARDEN_CLUSTER_TOKEN=... \
+WARDEN_NODE=build-01 \
+WARDEN_UPSTREAM=http://hub:7010 \
+WARDEN_ADVERTISE=http://build-01:7010 \
+  warden serve
+```
+
+```sh
+$ warden nodes --url http://hub:7010
+NODE      URL                    POOL       VERSION  STATUS  LAST SEEN
+build-01  http://build-01:7010   9000-9099  0.1.0    online  4s ago
+web-02    http://web-02:7010     9000-9099  0.1.0    stale   6m ago
+```
+
+**Every node owns its own ports.** The hub is a directory, never the owner, and
+that is not a detail: whether a port is free can only be answered on the machine
+itself, by trying to bind it. Move the decision to the hub and warden loses the
+one thing that makes it more than a spreadsheet — and nothing would start
+anywhere while the hub is down.
+
+So a node that cannot reach its hub carries on handing out ports and says so in
+its log. A node that stops reporting is shown as `stale` rather than dropped: a
+server that is not answering is a fact worth seeing, and
+`warden nodes --forget build-01` removes it once it is gone for good.
+
+`WARDEN_ADVERTISE` is the address the hub should use. Leave it out only when both
+run on the same machine; a node pointing at a hub elsewhere while advertising
+`127.0.0.1` is refused at startup rather than left to fail silently later.
+
+Wardens authenticate to each other with `WARDEN_CLUSTER_TOKEN`, which is separate
+from the `WARDEN_TOKEN` a person uses. Announcing takes the cluster token;
+reading the fleet takes the human one.
+
 ## Configuration
 
 Every setting is an environment variable prefixed `WARDEN_`, or a line in a
@@ -262,6 +308,11 @@ Every setting is an environment variable prefixed `WARDEN_`, or a line in a
 | `WARDEN_ALLOW_KILL` | `false` | Let the API stop processes |
 | `WARDEN_TOKEN` | empty | Require `Authorization: Bearer <token>` |
 | `WARDEN_URL` | `http://127.0.0.1:7010` | Registry the client and CLI talk to |
+| `WARDEN_NODE` | machine name | This warden's name in the fleet |
+| `WARDEN_UPSTREAM` | empty | Hub to report to; empty means it is one |
+| `WARDEN_ADVERTISE` | from host and port | Address the hub should use to reach it |
+| `WARDEN_CLUSTER_TOKEN` | empty | Shared secret between wardens |
+| `WARDEN_NODE_TTL` | `90` | Seconds a node's entry stays fresh |
 
 The registry binds to loopback and has no authentication by default. Set a token
 before binding it to anything else.
