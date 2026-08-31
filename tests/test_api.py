@@ -260,3 +260,43 @@ def test_a_qualified_lookup_on_this_warden_itself(client: TestClient):
 
 def test_a_qualified_lookup_on_a_node_nobody_knows(client: TestClient):
     assert client.get("/v1/fleet/services/nowhere/api").status_code == 404
+
+
+def test_the_update_status_is_readable(client: TestClient):
+    body = client.get("/v1/update").json()
+    assert body["current"]
+    assert body["available"] is False
+
+
+def test_updating_over_the_api_is_off_by_default(client: TestClient):
+    response = client.post("/v1/update")
+    assert response.status_code == 403
+    assert "WARDEN_ALLOW_REMOTE_UPDATE" in response.json()["detail"]
+
+
+def test_a_warden_allowed_to_update_still_needs_to_know_how(settings: Settings):
+    willing = settings.model_copy(update={"allow_remote_update": True})
+    with TestClient(create_app(willing)) as client:
+        response = client.post("/v1/update")
+        assert response.status_code == 403
+        assert "WARDEN_UPDATE_COMMAND" in response.json()["detail"]
+
+
+def test_either_token_may_ask_a_warden_to_update_itself(settings: Settings):
+    # The hub does this on its rounds with the cluster token; an operator does
+    # it by hand with theirs. WARDEN_ALLOW_REMOTE_UPDATE is the real gate, and
+    # 403 here means the token was accepted and the setting was not.
+    with guarded(settings) as client:
+        assert client.post("/v1/update").status_code == 401
+        assert client.post("/v1/update", headers=HUMAN).status_code == 403
+        assert client.post("/v1/update", headers=CLUSTER).status_code == 403
+
+
+def test_a_fleet_update_reports_every_warden_including_this_one(client: TestClient):
+    client.post("/v1/nodes", json={**NODE, "url": "http://192.0.2.1:7010"})
+    body = client.post("/v1/fleet/update").json()
+    assert {row["node"] for row in body["results"]} == {"hub", "build-01"}
+    assert all(row["ok"] is False for row in body["results"])
+    # The hub says why it refused itself, rather than pretending it worked.
+    here = next(row for row in body["results"] if row["node"] == "hub")
+    assert "WARDEN_ALLOW_REMOTE_UPDATE" in here["detail"]

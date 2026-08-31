@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     allow_kill: bool = False
     token: str | None = None
 
+    update_check: bool = True
+    update_repo: str = "vxnsin/warden"
+    update_interval: int = Field(default=6 * 60 * 60, ge=300)
+    allow_remote_update: bool = False
+    update_command: str | None = None
+
     node: str = Field(default_factory=default_node)
     advertise: str | None = None
     upstream: str | None = None

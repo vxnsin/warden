@@ -14,7 +14,7 @@ from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
 from warden.listeners import holder_of, listeners, stop
-from warden.models import FleetRegistration, Registration
+from warden.models import FleetRegistration, FleetUpdate, Registration, UpdateStatus
 
 app = typer.Typer(
     add_completion=False,
@@ -387,6 +387,70 @@ def release(name: str, url: UrlOption = None, token: TokenOption = None) -> None
         except WardenError as exc:
             raise _fail(exc) from exc
     console.print(f"released {name}")
+
+
+@app.command()
+def update(
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Ask this warden to update itself.")
+    ] = False,
+    fleet: Annotated[
+        bool, typer.Option("--fleet", help="Ask every warden in the fleet to update itself.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask first.")] = False,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Say whether a newer warden exists, and optionally go and get it."""
+    with _client(url, token) as client:
+        try:
+            if not (apply or fleet):
+                _show_update(client.update_status(), as_json=as_json)
+                return
+
+            what = "every warden in the fleet" if fleet else f"the warden at {client.url}"
+            if not yes and not typer.confirm(f"Update {what}?"):
+                console.print("left alone", style=theme.BONE_DIM)
+                return
+
+            if fleet:
+                _show_fleet_update(client.update_fleet(), as_json=as_json)
+            else:
+                detail = client.update_self()
+                _dump({"detail": detail}) if as_json else console.print(detail)
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+
+def _show_update(status: UpdateStatus, *, as_json: bool) -> None:
+    if as_json:
+        _dump(status.model_dump(mode="json"))
+        return
+    if status.available:
+        console.print(f"warden {status.latest} is out, this is {status.current}", style=theme.GLOW)
+        if status.url:
+            console.print(status.url, style=theme.BONE_DIM)
+    elif status.latest:
+        console.print(f"{status.current} is the newest there is", style=theme.BONE_DIM)
+    else:
+        console.print(f"{status.current}; {status.reason}", style=theme.BONE_DIM)
+
+
+def _show_fleet_update(result: FleetUpdate, *, as_json: bool) -> None:
+    if as_json:
+        _dump(result.model_dump(mode="json"))
+        return
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "RESULT", "DETAIL"):
+        table.add_column(column)
+    for row in result.results:
+        table.add_row(
+            row.node,
+            Text("updated" if row.ok else "refused", style=theme.MOSS if row.ok else theme.EMBER),
+            Text(row.detail, style=theme.BONE_DIM),
+        )
+    console.print(table)
 
 
 NODE_COLOURS = {"online": theme.MOSS, "stale": theme.SHRIEKER}

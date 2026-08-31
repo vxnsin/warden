@@ -10,9 +10,11 @@ from warden.errors import UnknownNodeError, UnknownServiceError
 from warden.models import (
     FleetRegistration,
     FleetServices,
+    FleetUpdate,
     Node,
     Registration,
     Unreachable,
+    UpdateResult,
 )
 
 # Long enough for a busy machine on a local network, short enough that a rack of
@@ -86,6 +88,37 @@ async def gather_services(
     services.sort(key=lambda service: (service.node, service.port))
     unreachable.sort(key=lambda node: node.node)
     return FleetServices(services=services, unreachable=unreachable)
+
+
+async def _update_one(http: httpx.AsyncClient, node: Node) -> UpdateResult:
+    try:
+        response = await http.post(f"{node.url}/v1/update")
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.json().get("detail", reason(exc))
+        return UpdateResult(node=node.name, url=node.url, ok=False, detail=str(detail))
+    except httpx.HTTPError as exc:
+        return UpdateResult(node=node.name, url=node.url, ok=False, detail=reason(exc))
+    return UpdateResult(
+        node=node.name,
+        url=node.url,
+        ok=True,
+        detail=str(response.json().get("detail", "done")),
+    )
+
+
+async def update_fleet(
+    http: httpx.AsyncClient, nodes: list[Node], *, here: UpdateResult
+) -> FleetUpdate:
+    """Ask every node to update itself.
+
+    Each node decides what that means; the hub sends no command, only the
+    request. A node with nothing configured refuses, and says so.
+    """
+    results = list(await asyncio.gather(*(_update_one(http, node) for node in nodes)))
+    results.append(here)
+    results.sort(key=lambda result: result.node)
+    return FleetUpdate(results=results)
 
 
 async def lookup_on(

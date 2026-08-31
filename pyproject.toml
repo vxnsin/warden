@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
     "fastapi>=0.115",
     "httpx>=0.28",
+    "packaging>=24.2",
     "platformdirs>=4.3",
     "pydantic>=2.9",
     "psutil>=6.1",

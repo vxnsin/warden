@@ -141,6 +141,30 @@ class Node(BaseModel):
         return f"{self.pool_start}-{self.pool_end}"
 
 
+class UpdateStatus(BaseModel):
+    """Whether a newer warden exists, or why that is not known."""
+
+    current: str
+    latest: str | None = None
+    available: bool = False
+    url: str | None = None
+    checked_at: datetime | None = None
+    reason: str | None = None
+
+
+class UpdateResult(BaseModel):
+    """What happened when one warden was asked to update itself."""
+
+    node: str
+    url: str
+    ok: bool
+    detail: str
+
+
+class FleetUpdate(BaseModel):
+    results: list[UpdateResult]
+
+
 class FleetRegistration(Registration):
     """A registration, and which warden handed it out."""
 

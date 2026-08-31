@@ -531,6 +531,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "packaging" },
     { name = "platformdirs" },
     { name = "psutil" },
     { name = "pydantic" },
@@ -551,6 +552,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "packaging", specifier = ">=24.2" },
     { name = "platformdirs", specifier = ">=4.3" },
     { name = "psutil", specifier = ">=6.1" },
     { name = "pydantic", specifier = ">=2.9" },

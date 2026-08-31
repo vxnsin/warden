@@ -38,3 +38,7 @@ class StillRunningError(WardenError):
 
 class UnknownNodeError(WardenError):
     status_code = 404
+
+
+class UpdateFailedError(WardenError):
+    status_code = 500

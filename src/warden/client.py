@@ -19,10 +19,12 @@ from warden.errors import (
 from warden.models import (
     FleetRegistration,
     FleetServices,
+    FleetUpdate,
     Listener,
     Node,
     PoolStatus,
     Registration,
+    UpdateStatus,
 )
 
 _STATUS_ERRORS: dict[int, type[WardenError]] = {
@@ -162,6 +164,20 @@ class WardenClient:
         params = {key: value for key, value in (("project", project), ("kind", kind)) if value}
         return FleetServices.model_validate(
             self._request("GET", "/v1/fleet/services", params=params)
+        )
+
+    def update_status(self) -> UpdateStatus:
+        """Whether the warden you are talking to knows of a newer one."""
+        return UpdateStatus.model_validate(self._request("GET", "/v1/update"))
+
+    def update_self(self) -> str:
+        """Ask that warden to run its own update command."""
+        return str(self._request("POST", "/v1/update")["detail"])
+
+    def update_fleet(self) -> FleetUpdate:
+        """Ask every warden in the fleet to update itself."""
+        return FleetUpdate.model_validate(
+            self._request("POST", "/v1/fleet/update", timeout=310.0)
         )
 
     def fleet_lookup(self, node: str, name: str) -> FleetRegistration:

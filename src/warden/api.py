@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
-from warden import __version__, aggregate
+from warden import __version__, aggregate, updates
 from warden.allocator import PortPool
 from warden.config import Settings
 from warden.errors import NotPermittedError, WardenError
@@ -18,6 +18,7 @@ from warden.models import (
     ErrorResponse,
     FleetRegistration,
     FleetServices,
+    FleetUpdate,
     HeartbeatRequest,
     Listener,
     Node,
@@ -25,6 +26,8 @@ from warden.models import (
     PoolStatus,
     Registration,
     RegistrationRequest,
+    UpdateResult,
+    UpdateStatus,
 )
 from warden.service import Registry
 from warden.store import Store
@@ -67,9 +70,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # that is perfectly able to hand out ports on its own.
         reporter = UpstreamReporter(settings)
         reporter.start()
+        watcher = updates.UpdateWatcher(settings)
+        watcher.start()
+        app.state.updates = watcher
         try:
             yield
         finally:
+            await watcher.stop()
             await reporter.stop()
             store.close()
 
@@ -94,11 +101,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Announcing. A node must manage this without a person's token."""
         _check(settings.cluster_token, authorization, "cluster token")
 
-    def readable(authorization: Annotated[str | None, Header()] = None) -> None:
-        """Reading, for a person or for another warden in the same fleet.
+    def known_caller(authorization: Annotated[str | None, Header()] = None) -> None:
+        """A person with the API token, or another warden with the cluster one.
 
-        The cluster token only ever adds access here; it can never open a door
-        that WARDEN_TOKEN has closed, and it opens nothing that changes state.
+        Guards reading, and asking a warden to update itself - both things the
+        hub does on its rounds and an operator does by hand. The cluster token
+        only ever adds access; it can never open a door WARDEN_TOKEN has closed.
         """
         if settings.token is None:
             return
@@ -121,7 +129,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
 
     v1 = APIRouter(prefix="/v1", dependencies=[Depends(authorize)])
-    reads = APIRouter(prefix="/v1", dependencies=[Depends(readable)])
+    reads = APIRouter(prefix="/v1", dependencies=[Depends(known_caller)])
 
     @reads.get("/pool", summary="Pool usage")
     def pool(manager: Manager) -> PoolStatus:
@@ -215,7 +223,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return node
 
-    @nodes.get("", summary="Every warden this one knows", dependencies=[Depends(readable)])
+    @nodes.get("", summary="Every warden this one knows", dependencies=[Depends(known_caller)])
     def list_nodes(fleet: FleetDep) -> list[Node]:
         return fleet.nodes()
 
@@ -230,7 +238,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fleet.forget(name)
 
     fleet_view = APIRouter(
-        prefix="/v1/fleet", tags=["fleet"], dependencies=[Depends(readable)]
+        prefix="/v1/fleet", tags=["fleet"], dependencies=[Depends(known_caller)]
     )
 
     @fleet_view.get("/services", summary="Everything the whole fleet holds")
@@ -263,7 +271,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with aggregate.client(settings.cluster_token) as http:
             return await aggregate.lookup_on(http, fleet.nodes(), node, name)
 
+    @reads.get("/update", summary="Whether a newer warden exists")
+    def update_status(request: Request) -> UpdateStatus:
+        return request.app.state.updates.status
+
+    # Its own router: on `v1` the blanket person-check would run first and turn
+    # a hub's perfectly good cluster token into a 401.
+    between = APIRouter(prefix="/v1", tags=["updates"], dependencies=[Depends(known_caller)])
+
+    @between.post(
+        "/update",
+        summary="Ask this warden to update itself",
+        responses={
+            status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
+            status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
+        },
+    )
+    def update_self() -> dict[str, str]:
+        # What updating means lives in this machine's own configuration. The
+        # request carries no command, so a hub can ask but never dictate.
+        return {"detail": updates.apply(settings)}
+
+    @fleet_view.post("/update", summary="Ask every warden in the fleet to update itself")
+    async def update_everyone(fleet: FleetDep) -> FleetUpdate:
+        try:
+            here = UpdateResult(
+                node=settings.node,
+                url=settings.advertise_url,
+                ok=True,
+                detail=updates.apply(settings),
+            )
+        except WardenError as exc:
+            here = UpdateResult(
+                node=settings.node, url=settings.advertise_url, ok=False, detail=exc.message
+            )
+        async with aggregate.client(settings.cluster_token, timeout=300.0) as http:
+            return await aggregate.update_fleet(http, fleet.nodes(), here=here)
+
     app.include_router(reads)
+    app.include_router(between)
     app.include_router(v1)
     app.include_router(nodes)
     app.include_router(fleet_view)

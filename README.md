@@ -194,6 +194,9 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | `DELETE` | `/v1/nodes/{name}` | Forget a warden |
 | `GET` | `/v1/fleet/services` | Everything the fleet holds, plus what did not answer |
 | `GET` | `/v1/fleet/services/{node}/{name}` | One service on one named node |
+| `GET` | `/v1/update` | Whether a newer warden exists |
+| `POST` | `/v1/update` | Ask this warden to update itself |
+| `POST` | `/v1/fleet/update` | Ask every warden in the fleet to update itself |
 
 ```sh
 curl -s localhost:7010/v1/services \
@@ -309,6 +312,29 @@ opens nothing that changes state.
 [docs/fleet.md](docs/fleet.md) goes through the whole thing: what the hub keeps,
 what survives what, and why it is built this way.
 
+## Updates
+
+```sh
+$ warden update
+warden 0.2.0 is out, this is 0.1.0
+
+$ warden update --fleet --url http://hub:7010
+NODE      RESULT   DETAIL
+build-01  updated  Successfully installed warden-0.2.0
+db-03     refused  updating over the API is switched off
+hub       updated  Successfully installed warden-0.2.0
+```
+
+**The hub sends an intent, never a command.** `POST /v1/update` means "update
+yourself"; what that does comes from the asked machine's own
+`WARDEN_UPDATE_COMMAND` and nowhere else. Otherwise a leaked cluster token would
+be worth every machine it can reach. Both `WARDEN_ALLOW_REMOTE_UPDATE` and a
+configured command are off by default, and a warden without them refuses and
+says so.
+
+[docs/updates.md](docs/updates.md) has the rest, including why the restart is
+your command's job.
+
 ## Configuration
 
 Every setting is an environment variable prefixed `WARDEN_`, or a line in a
@@ -326,6 +352,9 @@ Every setting is an environment variable prefixed `WARDEN_`, or a line in a
 | `WARDEN_ALLOW_KILL` | `false` | Let the API stop processes |
 | `WARDEN_TOKEN` | empty | Require `Authorization: Bearer <token>` |
 | `WARDEN_URL` | `http://127.0.0.1:7010` | Registry the client and CLI talk to |
+| `WARDEN_UPDATE_CHECK` | `true` | Ask GitHub whether a newer release exists |
+| `WARDEN_ALLOW_REMOTE_UPDATE` | `false` | Let a caller ask this warden to update itself |
+| `WARDEN_UPDATE_COMMAND` | empty | What updating means on this machine |
 | `WARDEN_NODE` | machine name | This warden's name in the fleet |
 | `WARDEN_UPSTREAM` | empty | Hub to report to; empty means it is one |
 | `WARDEN_ADVERTISE` | from host and port | Address the hub should use to reach it |

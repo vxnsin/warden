@@ -38,4 +38,5 @@ def settings(tmp_path: Path) -> Settings:
         pool_start=8000,
         pool_end=8004,
         probe=False,
+        update_check=False,
     )
