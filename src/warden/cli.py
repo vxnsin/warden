@@ -12,12 +12,13 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from warden import __version__, autostart, config, health, runner, theme
+from warden import __version__, autostart, config, health, runner, store, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
 from warden.listeners import GONE, holder_of, listeners, stop
 from warden.models import (
+    Event,
     FleetListeners,
     FleetPool,
     FleetRegistration,
@@ -639,6 +640,68 @@ def service_status(as_json: JsonOption = False) -> None:
         return
     colour = theme.MOSS if state == autostart.RUNNING else theme.BONE_DIM
     console.print(Text(state, style=colour), f"({starter.kind})")
+
+
+ACTION_COLOURS = {
+    store.REGISTERED: theme.MOSS,
+    store.RENEWED: theme.BONE_DIM,
+    store.MOVED: theme.AMETHYST,
+    store.RELEASED: theme.SHRIEKER,
+    store.EXPIRED: theme.EMBER,
+}
+
+
+def _history_table(events: list[Event]) -> Table:
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("WHEN", "WHAT", "SERVICE", "KIND", "ADDRESS", "PID"):
+        table.add_column(column)
+    for event in events:
+        table.add_row(
+            Text(theme.age(event.at), style=theme.BONE_DIM),
+            Text(event.action, style=ACTION_COLOURS.get(event.action, theme.BONE)),
+            event.name,
+            Text(event.kind, style=theme.kind_colour(event.kind)),
+            event.address,
+            Text(str(event.pid) if event.pid else "-", style=theme.BONE_DIM),
+        )
+    return table
+
+
+@app.command()
+def history(
+    what: Annotated[
+        str | None,
+        typer.Argument(help="A port, or a service name. Everything recent without one."),
+    ] = None,
+    limit: Annotated[int, typer.Option(help="How many to show.")] = 20,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """What happened to a port, kept after it stopped being true.
+
+    The registry only knows what is true now, and "what had 8000 yesterday" is
+    a question people ask far more often than that allows for.
+    """
+    port = int(what) if what and what.isdigit() else None
+    name = what if what and not what.isdigit() else None
+
+    with _client(url, token) as client:
+        try:
+            events = client.history(port=port, name=name, limit=limit)
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+    if as_json:
+        _dump([event.model_dump(mode="json") for event in events])
+        return
+    if not events:
+        console.print(
+            f"nothing recorded for {what}" if what else "nothing recorded yet",
+            style=theme.BONE_DIM,
+        )
+        return
+    console.print(_history_table(events))
 
 
 @app.command()

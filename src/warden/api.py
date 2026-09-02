@@ -5,7 +5,17 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import JSONResponse
 
 from warden import __version__, aggregate, updates
@@ -16,6 +26,7 @@ from warden.fleet import Fleet
 from warden.listeners import listeners, stop
 from warden.models import (
     ErrorResponse,
+    Event,
     FleetListeners,
     FleetPool,
     FleetRegistration,
@@ -191,6 +202,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def release(name: str, manager: Manager) -> None:
         manager.release(name)
+
+    @reads.get("/history", summary="What happened to a port or a service")
+    def history(
+        manager: Manager,
+        port: int | None = None,
+        name: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    ) -> list[Event]:
+        return manager.history(port=port, name=name, limit=limit)
 
     @reads.get("/listeners", summary="Every socket bound on this machine")
     def list_listeners(udp: bool = True) -> list[Listener]:

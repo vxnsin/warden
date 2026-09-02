@@ -17,6 +17,7 @@ from warden.errors import (
     WardenError,
 )
 from warden.models import (
+    Event,
     FleetListeners,
     FleetPool,
     FleetRegistration,
@@ -162,6 +163,18 @@ class WardenClient:
     def health(self) -> Health:
         """What the warden says about itself, without needing a token."""
         return Health.model_validate(self._request("GET", "/health"))
+
+    def history(
+        self, *, port: int | None = None, name: str | None = None, limit: int = 100
+    ) -> list[Event]:
+        """What happened to a port, to a service, or lately to anything."""
+        params: dict[str, object] = {"limit": limit}
+        if port is not None:
+            params["port"] = port
+        if name is not None:
+            params["name"] = name
+        payload = self._request("GET", "/v1/history", params=params)
+        return [Event.model_validate(item) for item in payload]
 
     def pool(self) -> PoolStatus:
         return PoolStatus.model_validate(self._request("GET", "/v1/pool"))

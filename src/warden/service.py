@@ -7,6 +7,7 @@ from warden.allocator import PortPool, is_bound
 from warden.errors import PoolExhaustedError, PortUnavailableError, UnknownServiceError
 from warden.listeners import bound_ports, holding
 from warden.models import (
+    Event,
     HeartbeatRequest,
     PoolStatus,
     Registration,
@@ -43,6 +44,11 @@ class Registry:
                 registration.model_copy(update={"holder": holder, "holder_reason": reason})
             )
         return filled
+
+    def history(
+        self, *, port: int | None = None, name: str | None = None, limit: int = 100
+    ) -> list[Event]:
+        return self.store.history(port=port, name=name, limit=limit)
 
     def get(self, name: str) -> Registration:
         self.store.purge_expired(utcnow())

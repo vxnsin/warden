@@ -144,6 +144,23 @@ class Node(BaseModel):
         return f"{self.pool_start}-{self.pool_end}"
 
 
+class Event(BaseModel):
+    """Something that happened to a port, kept after it stopped being true."""
+
+    at: datetime
+    action: str
+    name: str
+    kind: str
+    project: str | None = None
+    host: str
+    port: int
+    pid: int | None = None
+
+    @property
+    def address(self) -> str:
+        return f"{self.host}:{self.port}"
+
+
 class Health(BaseModel):
     """What a warden says about itself when asked whether it is there."""
 

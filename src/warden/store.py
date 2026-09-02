@@ -6,7 +6,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from warden.models import Node, Registration
+from warden.models import Event, Node, Registration
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS registrations (
@@ -27,6 +27,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS registrations_endpoint
 CREATE INDEX IF NOT EXISTS registrations_project
     ON registrations (project);
 
+CREATE TABLE IF NOT EXISTS events (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      TEXT NOT NULL,
+    action  TEXT NOT NULL,
+    name    TEXT NOT NULL,
+    kind    TEXT NOT NULL,
+    project TEXT,
+    host    TEXT NOT NULL,
+    port    INTEGER NOT NULL,
+    pid     INTEGER
+);
+CREATE INDEX IF NOT EXISTS events_port ON events (port);
+CREATE INDEX IF NOT EXISTS events_name ON events (name);
+
 CREATE TABLE IF NOT EXISTS nodes (
     name       TEXT PRIMARY KEY,
     url        TEXT NOT NULL,
@@ -41,6 +55,17 @@ CREATE TABLE IF NOT EXISTS nodes (
 
 # Columns added after the first release, applied to databases that predate them.
 ADDED_COLUMNS = {"ttl": "INTEGER"}
+
+REGISTERED = "registered"
+RENEWED = "renewed"
+MOVED = "moved"
+RELEASED = "released"
+EXPIRED = "expired"
+
+# Enough to answer "what had this port last week" on a busy machine, and few
+# enough that a warden left running for a year does not grow a database nobody
+# asked for.
+EVENT_CAP = 5000
 
 
 def _isoformat(value: datetime | None) -> str | None:
@@ -63,6 +88,19 @@ def _row_to_registration(row: sqlite3.Row) -> Registration:
     )
 
 
+def _row_to_event(row: sqlite3.Row) -> Event:
+    return Event(
+        at=datetime.fromisoformat(row["at"]),
+        action=row["action"],
+        name=row["name"],
+        kind=row["kind"],
+        project=row["project"],
+        host=row["host"],
+        port=row["port"],
+        pid=row["pid"],
+    )
+
+
 def _row_to_node(row: sqlite3.Row) -> Node:
     return Node(
         name=row["name"],
@@ -79,8 +117,9 @@ def _row_to_node(row: sqlite3.Row) -> Node:
 class Store:
     """SQLite-backed registry. Safe to share across threads."""
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, event_cap: int = EVENT_CAP) -> None:
         self.path = path if path == ":memory:" else Path(path)
+        self.event_cap = event_cap
         if isinstance(self.path, Path):
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -152,8 +191,60 @@ class Store:
         with self._lock:
             return self._db.execute("SELECT COUNT(*) AS n FROM registrations").fetchone()["n"]
 
+    def _record(self, action: str, row: Registration | sqlite3.Row, at: datetime) -> None:
+        """Write down what just happened, then drop the oldest if there are too many.
+
+        Called with the lock already held and committed by the caller, so an
+        event can never outlive the change it describes.
+        """
+        held = row if isinstance(row, sqlite3.Row) else row.model_dump()
+        self._db.execute(
+            """
+            INSERT INTO events (at, action, name, kind, project, host, port, pid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _isoformat(at),
+                action,
+                held["name"],
+                held["kind"],
+                held["project"],
+                held["host"],
+                held["port"],
+                held["pid"],
+            ),
+        )
+        self._db.execute(
+            "DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?",
+            (self.event_cap,),
+        )
+
+    def history(
+        self, *, port: int | None = None, name: str | None = None, limit: int = 100
+    ) -> list[Event]:
+        """What happened to a port, to a service, or lately to anything."""
+        query = "SELECT * FROM events"
+        clauses: list[str] = []
+        params: list[object] = []
+        if port is not None:
+            clauses.append("port = ?")
+            params.append(port)
+        if name is not None:
+            clauses.append("name = ?")
+            params.append(name)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            rows = self._db.execute(query, params).fetchall()
+        return [_row_to_event(row) for row in rows]
+
     def save(self, registration: Registration) -> None:
         with self._lock:
+            previous = self._db.execute(
+                "SELECT port FROM registrations WHERE name = ?", (registration.name,)
+            ).fetchone()
             self._db.execute(
                 """
                 INSERT INTO registrations
@@ -185,11 +276,23 @@ class Store:
                     _isoformat(registration.expires_at),
                 ),
             )
+            if previous is None:
+                action = REGISTERED
+            elif previous["port"] != registration.port:
+                action = MOVED
+            else:
+                action = RENEWED
+            self._record(action, registration, registration.updated_at)
             self._db.commit()
 
     def delete(self, name: str) -> bool:
         with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM registrations WHERE name = ?", (name,)
+            ).fetchone()
             cursor = self._db.execute("DELETE FROM registrations WHERE name = ?", (name,))
+            if row is not None:
+                self._record(RELEASED, row, datetime.now(UTC))
             self._db.commit()
         return cursor.rowcount > 0
 
@@ -246,7 +349,7 @@ class Store:
         cutoff = _isoformat(now)
         with self._lock:
             rows = self._db.execute(
-                "SELECT name FROM registrations WHERE expires_at IS NOT NULL AND expires_at <= ?",
+                "SELECT * FROM registrations WHERE expires_at IS NOT NULL AND expires_at <= ?",
                 (cutoff,),
             ).fetchall()
             if rows:
@@ -255,5 +358,7 @@ class Store:
                     "WHERE expires_at IS NOT NULL AND expires_at <= ?",
                     (cutoff,),
                 )
+                for row in rows:
+                    self._record(EXPIRED, row, now)
                 self._db.commit()
         return [row["name"] for row in rows]
