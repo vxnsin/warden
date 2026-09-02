@@ -1,4 +1,4 @@
-<img src="assets/wordmark.svg" alt="warden" width="260">
+<img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/wordmark.svg" alt="warden" width="260">
 
 **Nothing binds a port without asking.**
 
@@ -7,7 +7,7 @@ under a name, say what they are, and get a port back. The same name keeps the
 same port across restarts, so a backend never wakes up on the port its frontend
 grabbed while it was down.
 
-<img src="assets/tui.svg" alt="The warden dashboard" width="900">
+<img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/tui.svg" alt="The warden dashboard" width="900">
 
 ## What is on port 3000?
 
@@ -127,7 +127,7 @@ warden tui
 Two live tables, refreshed every two seconds. `tab` swaps between what warden
 handed out and what is actually listening:
 
-<img src="assets/tui-ports.svg" alt="The listening ports view" width="900">
+<img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/tui-ports.svg" alt="The listening ports view" width="900">
 
 | Key | Action |
 | --- | --- |
@@ -378,7 +378,7 @@ Wardens authenticate to each other with `WARDEN_CLUSTER_TOKEN`, separate from th
 `WARDEN_TOKEN` a person uses. The cluster token opens announcing and reading; it
 opens nothing that changes state.
 
-[docs/fleet.md](docs/fleet.md) goes through the whole thing: what the hub keeps,
+[docs/fleet.md](https://github.com/vxnsin/warden/blob/main/docs/fleet.md) goes through the whole thing: what the hub keeps,
 what survives what, and why it is built this way.
 
 ## Updates
@@ -401,7 +401,7 @@ be worth every machine it can reach. Both `WARDEN_ALLOW_REMOTE_UPDATE` and a
 configured command are off by default, and a warden without them refuses and
 says so.
 
-[docs/updates.md](docs/updates.md) has the rest, including why the restart is
+[docs/updates.md](https://github.com/vxnsin/warden/blob/main/docs/updates.md) has the rest, including why the restart is
 your command's job.
 
 ## Configuration
