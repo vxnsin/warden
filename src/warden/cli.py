@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from warden import __version__, config, health, runner, theme
+from warden import __version__, autostart, config, health, runner, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
@@ -554,6 +554,91 @@ def list_services(
         errors.print(
             f"{clash.name} is registered on {theme.listed(clash.nodes)}", style=theme.SHRIEKER
         )
+
+
+def _plan_lines(plan: autostart.Plan) -> list[str]:
+    """Everything installing would write or run, so it can be read first."""
+    lines = [str(plan.path)] if plan.path else []
+    if plan.body:
+        lines.extend(plan.body.strip().splitlines())
+    return lines + plan.steps
+
+
+service_app = typer.Typer(help="Start warden with the machine.")
+app.add_typer(service_app, name="service")
+
+
+@service_app.command("install")
+def service_install(
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Write it without asking.")
+    ] = False,
+) -> None:
+    """Have this machine start `warden serve` at login.
+
+    As the account running this command, never as root or SYSTEM: a warden
+    started by another user reads another user's settings and hands out ports
+    from a registry nobody else can see.
+    """
+    try:
+        starter = autostart.autostart_for()
+    except WardenError as exc:
+        raise _fail(exc) from exc
+
+    plan = starter.plan()
+    console.print(plan.kind, style=theme.GLOW)
+    for line in _plan_lines(plan):
+        console.print(f"  {line}", style=theme.BONE_DIM, highlight=False)
+
+    if not yes and not typer.confirm("Write it?"):
+        console.print("nothing written", style=theme.BONE_DIM)
+        return
+    try:
+        starter.install()
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    console.print(f"warden starts at login - {starter.status()}")
+
+
+@service_app.command("uninstall")
+def service_uninstall(
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Remove it without asking.")
+    ] = False,
+) -> None:
+    """Stop starting warden at login and remove what was written."""
+    try:
+        starter = autostart.autostart_for()
+    except WardenError as exc:
+        raise _fail(exc) from exc
+
+    if starter.status() == autostart.MISSING:
+        console.print("warden does not start at login here", style=theme.BONE_DIM)
+        return
+    if not yes and not typer.confirm(f"Remove the {starter.kind}?"):
+        console.print("left alone", style=theme.BONE_DIM)
+        return
+    try:
+        starter.uninstall()
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    console.print("warden no longer starts at login")
+
+
+@service_app.command("status")
+def service_status(as_json: JsonOption = False) -> None:
+    """Say whether warden starts at login, and whether it is up now."""
+    try:
+        starter = autostart.autostart_for()
+        state = starter.status()
+    except WardenError as exc:
+        raise _fail(exc) from exc
+
+    if as_json:
+        _dump({"kind": starter.kind, "status": state})
+        return
+    colour = theme.MOSS if state == autostart.RUNNING else theme.BONE_DIM
+    console.print(Text(state, style=colour), f"({starter.kind})")
 
 
 @app.command()
