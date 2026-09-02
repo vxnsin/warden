@@ -6,9 +6,14 @@ on:
   push:
     tags: ["v*"]
 
+# Nothing is granted that a job does not ask for by name.
+permissions: {}
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -16,6 +21,10 @@ jobs:
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The steps below run code out of the repository, which has no
+          # business holding a token that can write back to it.
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -26,8 +35,12 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v5
       - run: uv build
       - uses: actions/upload-artifact@v4
@@ -44,8 +57,10 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      # Pinned to commits rather than moving tags. This job holds the identity
+      # that can publish, so what it runs must not be able to change under it.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1
