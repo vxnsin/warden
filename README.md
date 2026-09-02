@@ -160,7 +160,9 @@ Every refresh asks every node, so a large fleet is worth a longer `--interval`.
 
 ## From Python
 
-The package ships a client, so a service can ask for its own port at startup:
+The package ships a client, so a service can ask for its own port at startup.
+Full usage on the
+[Python client](https://github.com/vxnsin/warden/wiki/Python-client) page:
 
 ```python
 import uvicorn
@@ -416,8 +418,18 @@ including why the restart is your command's job.
 
 ## Configuration
 
-Every setting is an environment variable prefixed `WARDEN_`, or a line in a
-`.env` file next to the process.
+```sh
+warden setup       # answer a few questions, once
+warden settings    # see every value, and where it came from
+```
+
+`warden setup` writes a file in the platform config directory, so a globally
+installed warden needs no environment at all. Settings still come from a flag,
+the environment or a `.env` beside the process when you want them to, in that
+order, and `warden settings` says which one is winning.
+
+[Configuration](https://github.com/vxnsin/warden/wiki/Configuration) has every
+setting. Each is also an environment variable with a `WARDEN_` prefix:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
