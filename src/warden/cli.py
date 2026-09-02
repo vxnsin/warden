@@ -28,7 +28,7 @@ from warden.models import (
 )
 
 app = typer.Typer(
-    add_completion=False,
+    add_completion=True,
     help="Nothing binds a port without asking. A registry that hands out local ports.",
 )
 console = Console()
@@ -344,6 +344,52 @@ def _announce(service: Registration, registered: bool) -> None:
     if not registered:
         line.append("   unregistered, no warden running", style=theme.SHRIEKER)
     errors.print(line)
+
+
+@app.command("env")
+def environment(
+    name: Annotated[str | None, typer.Argument(help="Register under this name.")] = None,
+    kind: Annotated[str, typer.Option("--kind", "-k", help="What the service is.")] = "service",
+    project: Annotated[str | None, typer.Option(help="Group services of one codebase.")] = None,
+    host: Annotated[str, typer.Option(help="Interface the service will bind to.")] = "127.0.0.1",
+    preferred_port: Annotated[
+        int | None, typer.Option(help="Wish for this port, take another if it is not free.")
+    ] = None,
+    require_port: Annotated[
+        int | None, typer.Option(help="Insist on this port, and fail if it is not free.")
+    ] = None,
+    export: Annotated[
+        bool, typer.Option("--export", help="Prefix each line for `eval $(warden env ...)`.")
+    ] = False,
+    write: Annotated[
+        Path | None, typer.Option(help="Update these keys in a dotenv file, leaving the rest.")
+    ] = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
+) -> None:
+    """Claim a port and print it as environment, for what cannot be wrapped."""
+    with _client(url, token) as client:
+        try:
+            service = client.register(
+                name or runner.default_name(),
+                kind=kind,
+                project=project,
+                host=host,
+                preferred_port=preferred_port,
+                require_port=require_port,
+            )
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+    values = runner.as_env(service)
+    if write:
+        before = write.read_text(encoding="utf-8") if write.is_file() else ""
+        write.write_text(runner.merge_dotenv(before, values), encoding="utf-8")
+        errors.print(f"{write}  ->  PORT={service.port}", style=theme.BONE_DIM)
+        return
+    prefix = "export " if export else ""
+    for key, value in values.items():
+        console.print(f"{prefix}{key}={value}", highlight=False)
 
 
 @app.command()

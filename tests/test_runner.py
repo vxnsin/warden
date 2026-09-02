@@ -114,3 +114,39 @@ def test_a_heartbeat_that_cannot_reach_the_warden_does_not_take_the_process_down
     beat._stop.wait(1.5)
     beat.stop()
     assert beat._thread is not None and not beat._thread.is_alive()
+
+
+def test_the_environment_to_print_carries_only_wardens_own():
+    values = runner.as_env(registration())
+    assert set(values) == {
+        "PORT", "WARDEN_PORT", "WARDEN_HOST", "WARDEN_ADDRESS", "WARDEN_SERVICE"
+    }
+
+
+def test_a_dotenv_gains_the_keys_it_did_not_have():
+    merged = runner.merge_dotenv("DEBUG=true\n", {"PORT": "8000"})
+    assert merged == "DEBUG=true\nPORT=8000\n"
+
+
+def test_a_key_already_there_is_replaced_where_it_stands():
+    merged = runner.merge_dotenv(
+        "DATABASE_URL=postgres://localhost/shop\nPORT=9999\nDEBUG=true\n",
+        {"PORT": "8000"},
+    )
+    assert merged.splitlines() == [
+        "DATABASE_URL=postgres://localhost/shop",
+        "PORT=8000",
+        "DEBUG=true",
+    ]
+
+
+def test_lines_warden_did_not_write_are_left_exactly_as_they_were():
+    # A .env is usually somebody else's file too.
+    before = "# ports below\n\nDATABASE_URL=postgres://x\nSECRET=  spaced  \n"
+    merged = runner.merge_dotenv(before, {"PORT": "8000"})
+    for line in before.strip("\n").splitlines():
+        assert line in merged.splitlines()
+
+
+def test_an_empty_file_just_gets_the_keys():
+    assert runner.merge_dotenv("", {"PORT": "8000"}) == "PORT=8000\n"

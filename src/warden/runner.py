@@ -46,6 +46,33 @@ def environment(registration: Registration) -> dict[str, str]:
     }
 
 
+def as_env(registration: Registration) -> dict[str, str]:
+    """Only what warden itself has to say, for printing or writing to a file."""
+    return {
+        "PORT": str(registration.port),
+        "WARDEN_PORT": str(registration.port),
+        "WARDEN_HOST": registration.host,
+        "WARDEN_ADDRESS": registration.address,
+        "WARDEN_SERVICE": registration.name,
+    }
+
+
+def merge_dotenv(text: str, values: dict[str, str]) -> str:
+    """The file with these keys set, and every other line exactly as it was.
+
+    A .env is usually somebody else's too, so lines warden did not write are
+    left alone rather than rewritten into a tidier file nobody asked for.
+    """
+    lines = text.splitlines()
+    remaining = dict(values)
+    for index, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if key in remaining:
+            lines[index] = f"{key}={remaining.pop(key)}"
+    lines.extend(f"{key}={value}" for key, value in remaining.items())
+    return "\n".join(lines).strip("\n") + "\n"
+
+
 class Heartbeat:
     """Renews a lease three times over while the process it belongs to runs."""
 
