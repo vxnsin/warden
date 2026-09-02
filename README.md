@@ -13,6 +13,16 @@ under a name, say what they are, and get a port back. The same name keeps the
 same port across restarts, so a backend never wakes up on the port its frontend
 grabbed while it was down.
 
+```sh
+$ warden run -- npm run dev
+shop-api  ->  8000
+
+  VITE ready, listening on http://localhost:8000
+```
+
+Nothing to change in the project: the port arrives as `PORT`, is held while the
+process runs, and goes back when it exits.
+
 <img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/tui.svg" alt="The warden dashboard" width="900">
 
 ## What is on port 3000?
@@ -87,13 +97,35 @@ Start the registry — it listens on `127.0.0.1:7010` and hands out `8000-8999`:
 warden serve
 ```
 
-Claim a port:
+Start something on a port it picks:
+
+```sh
+$ warden run --name shop-api --kind backend -- ./server
+shop-api  ->  8000
+```
+
+Or claim one by hand:
 
 ```sh
 $ warden register shop-api --kind backend --project shop
 8000
 $ warden register shop-web --kind frontend --project shop
 8001
+```
+
+For anything that cannot be wrapped — an IDE run configuration, a Makefile —
+`warden env` prints the same claim instead:
+
+```sh
+$ warden env shop-api --kind backend
+PORT=8000
+WARDEN_PORT=8000
+WARDEN_ADDRESS=127.0.0.1:8000
+```
+
+```sh
+eval $(warden env shop-api --export)
+warden env shop-api --write .env
 ```
 
 See who holds what:
@@ -110,6 +142,69 @@ Give a port back:
 ```sh
 warden release shop-web
 ```
+
+## When a port is held by something that is gone
+
+A registration outlives the process that asked for it, which is how a registry
+quietly turns into a list nobody trusts:
+
+```sh
+$ warden ls --holders
+SERVICE   KIND      PROJECT  ADDRESS         PID    HOLDER
+shop-api  backend   shop     127.0.0.1:8000  14204  running
+old-job   worker    -        127.0.0.1:8002  9930   gone
+
+$ warden reap
+release old-job? nothing is on 8002 and pid 9930 is gone [y/N]: y
+released 1
+```
+
+A holder is gone when the process it named no longer exists, or when nothing is
+listening on its port. Nothing is ever reclaimed on a timer: a service in the
+middle of a restart would lose its port to one, so `warden reap` is a person's
+decision.
+
+## What used to be on this port
+
+```sh
+$ warden history 8000
+WHEN    WHAT        SERVICE   KIND     ADDRESS         PID
+7s ago  released    shop-api  backend  127.0.0.1:8000  14204
+2h ago  registered  shop-api  backend  127.0.0.1:8000  14204
+```
+
+Every registration, renewal, move, release and expiry is written down as it
+happens, so this still answers for a service released weeks ago.
+`warden history shop-api` follows one service instead of one port.
+
+## When something is not working
+
+```sh
+$ warden doctor
+ok    warden 0.1.0 answering at http://127.0.0.1:7010, role hub
+ok    settings from ~/.config/warden/warden.toml
+warn  listening on 0.0.0.0 with no token set - anyone who can reach this
+      machine can hand out and release ports
+ok    pool 8000-8999, 4 held, 995 free
+warn  2 of 6 registrations held by something that is gone - warden reap
+ok    build-01 online, last seen 4s ago
+```
+
+One command instead of four. It exits `1` only when something failed and `0` on
+warnings, so it drops into a health check without an unset token being read as
+the machine being down.
+
+## Starting it with the machine
+
+```sh
+warden service install
+```
+
+A systemd user unit on Linux, a launchd agent on macOS, a command in the Startup
+folder on Windows. It prints the whole thing before writing it, and
+`warden service uninstall` takes it away again. Always as the account that ran
+it — a warden started by root or SYSTEM would hand out ports from a registry
+nobody else can see.
 
 ## Asking for a particular port
 
@@ -205,8 +300,10 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Liveness and number of registrations |
+| `GET` | `/metrics` | Prometheus metrics, behind the same token as every read |
 | `GET` | `/v1/pool` | Pool size, allocated, free, reserved |
-| `GET` | `/v1/services` | List registrations, filter by `project` and `kind` |
+| `GET` | `/v1/services` | List registrations, filter by `project` and `kind`, `holders=true` for whether each is still there |
+| `GET` | `/v1/history` | What happened, filter by `port` and `name` |
 | `POST` | `/v1/services` | Register a service, `201` when new, `200` when renewed |
 | `GET` | `/v1/services/{name}` | Look up one service |
 | `POST` | `/v1/services/{name}/heartbeat` | Extend a lease |
@@ -400,6 +497,22 @@ opens nothing that changes state.
 The [Cluster](https://github.com/vxnsin/warden/wiki/Cluster) page goes through
 the whole thing: what the hub keeps, what survives what, and why it is built
 this way.
+
+## In a container
+
+There is a `Dockerfile` and a `compose.yaml` bringing up a hub with two nodes:
+
+```sh
+WARDEN_TOKEN=... WARDEN_CLUSTER_TOKEN=... docker compose up -d
+docker compose exec hub warden nodes
+```
+
+**A warden in a container sees the container's ports, not the host's.** Probing
+and `warden ports` describe the network namespace they run in, so a warden meant
+to manage the host's ports needs `network_mode: host` — and is then on the
+host's network, where the token is the only thing between it and everyone else
+there. The [Docker](https://github.com/vxnsin/warden/wiki/Docker) page has the
+rest.
 
 ## Updates
 
