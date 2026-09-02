@@ -15,6 +15,8 @@ from textual.widgets import Button, DataTable, Label, Static
 from warden import theme
 from warden.client import WardenClient
 from warden.errors import WardenError
+from warden.listeners import listeners
+from warden.listeners import stop as stop_here
 from warden.models import FleetPool, Listener, PoolStatus, Registration, Unreachable
 
 SERVICES = "services"
@@ -196,6 +198,7 @@ class WardenApp(App[None]):
         # Not _nodes: that name belongs to Textual, for the widgets on screen.
         self._node_names: list[str] = []
         self._unreachable: list[Unreachable] = []
+        self.standalone = False
 
     def get_css_variables(self) -> dict[str, str]:
         return {**super().get_css_variables(), **PALETTE}
@@ -203,7 +206,7 @@ class WardenApp(App[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="shell"):
             yield Static(theme.banner_text(), id="banner")
-            yield Static(f"{theme.TAGLINE}  ~  {self.client.url}", id="tagline")
+            yield Static("", id="tagline")
             yield Static(HEADINGS[SERVICES], id="section")
             yield DataTable(id="rows", cursor_type="row")
             yield Static("", id="stats")
@@ -235,7 +238,9 @@ class WardenApp(App[None]):
         self._label()
 
     def _label(self) -> None:
-        """The heading and the key hints, which both follow the current filter."""
+        """The heading, whose machine this is, and the key hints."""
+        source = "this machine, no warden running" if self.standalone else self.client.url
+        self.query_one("#tagline", Static).update(f"{theme.TAGLINE}{SEP}{source}")
         self.query_one("#section", Static).update(self._heading())
         hints = [
             ("up/down/j/k", "move"),
@@ -322,9 +327,14 @@ class WardenApp(App[None]):
 
     def _load_ports(self) -> None:
         if not self.fleet:
-            self.call_from_thread(
-                self.show_ports, self.client.listeners(), self.client.services()
-            )
+            try:
+                found, services = self.client.listeners(), self.client.services()
+                self.standalone = False
+            except WardenError:
+                # The sockets are this machine's own; only the WARDEN column needs a registry.
+                found, services = listeners(), []
+                self.standalone = True
+            self.call_from_thread(self.show_ports, found, services)
             return
         found = self.client.fleet_listeners()
         self.call_from_thread(
@@ -350,6 +360,9 @@ class WardenApp(App[None]):
 
     @work(thread=True, group="act")
     def stop(self, pid: int, node: str | None = None) -> None:
+        if self.standalone:
+            self._act(lambda: stop_here(pid))
+            return
         self._act(lambda: self.client.stop(pid, node=node))
 
     def _act(self, action: Callable[[], None]) -> None:
@@ -466,6 +479,7 @@ class WardenApp(App[None]):
         }
         self._remember(rows, unreachable)
         rows = self._showing(rows)
+        self._label()
         table = self.query_one(DataTable)
         row = table.cursor_row
         table.clear()

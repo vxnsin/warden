@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from textual.widgets import DataTable, Static
 
 from warden import theme
+from warden.errors import WardenError
 from warden.models import (
     FleetListener,
     FleetListeners,
@@ -400,3 +401,62 @@ def test_stopping_in_the_fleet_names_the_machine_the_pid_is_on():
         assert app.client.stopped == [(4242, "build-01")]
 
     run_app(scenario, client=FleetStubClient(), fleet=True)
+
+
+class UnreachableClient(StubClient):
+    """A warden that is not running."""
+
+    def services(self, **_kwargs):
+        raise WardenError("no warden reachable at http://127.0.0.1:7010")
+
+    def pool(self):
+        raise WardenError("no warden reachable at http://127.0.0.1:7010")
+
+    def listeners(self, **_kwargs):
+        raise WardenError("no warden reachable at http://127.0.0.1:7010")
+
+
+def run_without_a_warden(scenario, size=(120, 40)) -> None:
+    async def main() -> None:
+        app = WardenApp(UnreachableClient(), interval=3600)
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            await scenario(app, pilot)
+
+    asyncio.run(main())
+
+
+def test_the_ports_of_this_machine_show_without_a_warden():
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.standalone is True
+        assert app.query_one(DataTable).row_count > 0
+
+    run_without_a_warden(scenario)
+
+
+def test_it_says_whose_ports_those_are():
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("tab")
+        await pilot.pause()
+        assert "no warden running" in str(app.query_one("#tagline", Static).content)
+
+    run_without_a_warden(scenario)
+
+
+def test_the_services_view_still_needs_a_registry():
+    async def scenario(app: WardenApp, _pilot) -> None:
+        assert app.query_one("#stats", Static).has_class("-error")
+
+    run_without_a_warden(scenario)
+
+
+def test_the_warden_it_talks_to_is_named_when_there_is_one():
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.standalone is False
+        assert StubClient.url in str(app.query_one("#tagline", Static).content)
+
+    run_app(scenario)
