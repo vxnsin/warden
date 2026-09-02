@@ -13,10 +13,14 @@ from warden.store import Store
 
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> None:
     for name in list(os.environ):
         if name.startswith("WARDEN_"):
             monkeypatch.delenv(name, raising=False)
+    # Never the config file of whoever is running the tests.
+    monkeypatch.setenv(
+        "WARDEN_CONFIG", str(tmp_path_factory.mktemp("config") / "warden.toml")
+    )
 
 
 @pytest.fixture

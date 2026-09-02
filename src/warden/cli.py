@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, get_type_hints
 
 import typer
+from pydantic import TypeAdapter, ValidationError
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from warden import __version__, theme
+from warden import __version__, config, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
@@ -101,6 +102,143 @@ def root(
         _greet()
         console.print(ctx.get_help())
         raise typer.Exit
+
+
+SECRETS = {"token", "cluster_token"}
+
+# The full annotations, so a set of ports keeps the parser that turns
+# "8080,9000-9010" into one.
+FIELD_TYPES = get_type_hints(Settings, include_extras=True)
+
+ORIGIN_COLOURS = {
+    "environment": theme.SHRIEKER,
+    ".env": theme.SHRIEKER,
+    "config file": theme.MOSS,
+    "default": theme.BONE_DIM,
+}
+
+
+def _shown(field: str, value: object) -> Text:
+    if field in SECRETS and value:
+        return Text("set", style=theme.MOSS)
+    if value is None or value == "" or value == set():
+        return Text("-", style=theme.BONE_DIM)
+    if isinstance(value, set):
+        value = ",".join(str(item) for item in sorted(value))
+    return Text(str(value))
+
+
+@app.command()
+def setup() -> None:
+    """Ask the few questions that matter and write the answers down."""
+    _greet()
+    current = Settings()
+    console.print(f"Settings go to {config.config_file()}", style=theme.BONE_DIM)
+    console.print()
+
+    answers: dict[str, object] = dict(config.stored())
+    pool = typer.prompt("Ports to hand out", default=f"{current.pool_start}-{current.pool_end}")
+    start, _, end = pool.partition("-")
+    answers["pool_start"], answers["pool_end"] = int(start), int(end or start)
+
+    reserved = typer.prompt("Ports never to hand out", default="", show_default=False)
+    if reserved.strip():
+        answers["reserved"] = sorted(config.parse_ports(reserved))
+    answers["port"] = typer.prompt("Port warden itself listens on", default=current.port, type=int)
+
+    if typer.confirm("Reachable from other machines?", default=current.host != "127.0.0.1"):
+        answers["host"] = "0.0.0.0"
+        console.print(
+            "  Listening beyond this machine, so it needs a token.", style=theme.SHRIEKER
+        )
+        answers["token"] = typer.prompt("  Token callers must send", default=current.token or "")
+    else:
+        answers["host"] = "127.0.0.1"
+
+    if typer.confirm("Does this warden report to another one?", default=bool(current.upstream)):
+        answers["upstream"] = typer.prompt(
+            "  Address of that warden", default=current.upstream or ""
+        )
+        answers["node"] = typer.prompt("  Name for this machine", default=current.node)
+        answers["advertise"] = typer.prompt(
+            "  Address it should use to reach this one", default=current.advertise_url
+        )
+        answers["cluster_token"] = typer.prompt(
+            "  Shared secret between wardens", default=current.cluster_token or ""
+        )
+
+    if typer.confirm("Allow stopping processes over the API?", default=current.allow_kill):
+        answers["allow_kill"] = True
+
+    written = config.write(answers)
+    console.print()
+    console.print(f"Written to {written}", style=theme.MOSS)
+    console.print("`warden settings` shows what is in effect.", style=theme.BONE_DIM)
+
+
+settings_app = typer.Typer(help="Show and change what is written down.")
+app.add_typer(settings_app, name="settings", invoke_without_command=True)
+
+
+@settings_app.callback(invoke_without_command=True)
+def settings_list(ctx: typer.Context, as_json: JsonOption = False) -> None:
+    """Show every setting, its value, and where that value came from."""
+    if ctx.invoked_subcommand is not None:
+        return
+    current = Settings()
+    if as_json:
+        _dump(
+            {
+                field: {"value": str(value), "from": config.origin(field)}
+                for field, value in current.model_dump().items()
+            }
+        )
+        return
+
+    console.print(f"{config.config_file()}", style=theme.BONE_DIM)
+    console.print()
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("SETTING", "VALUE", "FROM"):
+        table.add_column(column)
+    for field, value in current.model_dump().items():
+        source = config.origin(field)
+        table.add_row(field, _shown(field, value), Text(source, style=ORIGIN_COLOURS[source]))
+    console.print(table)
+
+
+@settings_app.command("set")
+def settings_set(field: str, value: str) -> None:
+    """Write one setting to the config file."""
+    if field not in Settings.model_fields:
+        raise _fail(WardenError(f"no setting called {field!r}; `warden settings` lists them all"))
+    try:
+        # Typed before it is written, so the file holds 4000 rather than "4000",
+        # then checked against the rest of the settings it has to live with.
+        typed = TypeAdapter(FIELD_TYPES[field]).validate_python(value)
+        checked = Settings(**{field: typed})
+    except ValidationError as exc:
+        raise _fail(WardenError(f"{field}: {exc.errors()[0]['msg']}")) from exc
+    # What the file records is what warden will read back. Not for reserved,
+    # where the settings add the API port and only what was asked for belongs.
+    keep = typed if field == "reserved" else getattr(checked, field)
+    config.write({**config.stored(), field: keep})
+    console.print(f"{field} = {value}", style=theme.MOSS)
+    if config.origin(field) != "config file":
+        console.print(
+            f"Note: {config.origin(field)} still wins over the file for this one.",
+            style=theme.SHRIEKER,
+        )
+
+
+@settings_app.command("unset")
+def settings_unset(field: str) -> None:
+    """Take one setting back out of the config file."""
+    stored = config.stored()
+    if field not in stored:
+        raise _fail(WardenError(f"{field} is not in the config file"))
+    del stored[field]
+    config.write(stored)
+    console.print(f"{field} removed, back to its default", style=theme.BONE_DIM)
 
 
 @app.command()

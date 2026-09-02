@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import socket
+import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
-from platformdirs import user_data_path
+from dotenv import dotenv_values
+from platformdirs import user_config_path, user_data_path
 from pydantic import BeforeValidator, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 
 DEFAULT_URL = "http://127.0.0.1:7010"
 
 
-def _parse_ports(value: object) -> object:
+def parse_ports(value: object) -> object:
     """Accept ``8080``, ``"8080,9000"`` and ``"8080, 9000-9010"`` for port sets."""
     if not isinstance(value, str):
         return value
@@ -31,11 +40,62 @@ def _parse_ports(value: object) -> object:
     return ports
 
 
-PortSet = Annotated[set[int], BeforeValidator(_parse_ports)]
+PortSet = Annotated[set[int], BeforeValidator(parse_ports)]
 
 
 def default_database() -> Path:
     return user_data_path("warden", appauthor=False) / "registry.db"
+
+
+def config_file() -> Path:
+    """Where `warden setup` writes, and every warden on this machine reads."""
+    override = os.environ.get("WARDEN_CONFIG")
+    if override:
+        return Path(override)
+    return user_config_path("warden", appauthor=False) / "warden.toml"
+
+
+def stored() -> dict[str, object]:
+    """What the config file holds, or nothing if there is none."""
+    path = config_file()
+    if not path.is_file():
+        return {}
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def write(values: Mapping[str, object]) -> Path:
+    """Replace the config file with these settings, dropping the empty ones."""
+    path = config_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    kept = {key: value for key, value in sorted(values.items()) if value not in (None, "")}
+    lines = ["# Written by `warden setup`. `warden settings` edits it.", ""]
+    lines += [f"{key} = {_toml(value)}" for key, value in kept.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _toml(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, set | list | tuple):
+        return "[" + ", ".join(_toml(item) for item in sorted(value)) + "]"
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def origin(field: str) -> str:
+    """Which source a setting's value came from, in the order they are consulted."""
+    if f"WARDEN_{field.upper()}" in os.environ:
+        return "environment"
+    if Path(".env").is_file() and field.upper() in {
+        key.upper().removeprefix("WARDEN_") for key in dotenv_values(".env")
+    }:
+        return ".env"
+    if field in stored():
+        return "config file"
+    return "default"
 
 
 def slugify(value: str) -> str:
@@ -95,6 +155,25 @@ class Settings(BaseSettings):
     upstream: str | None = None
     cluster_token: str | None = None
     node_ttl: int = Field(default=90, ge=10, le=86_400)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # A flag beats the environment, which beats a .env beside the process,
+        # which beats the file `warden setup` writes.
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            TomlConfigSettingsSource(settings_cls, toml_file=config_file()),
+            file_secret_settings,
+        )
 
     @field_validator("node")
     @classmethod
