@@ -16,7 +16,7 @@ from warden import __version__, config, runner, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
-from warden.listeners import holder_of, listeners, stop
+from warden.listeners import GONE, holder_of, listeners, stop
 from warden.models import (
     FleetListeners,
     FleetPool,
@@ -75,18 +75,29 @@ def _address(service: Registration) -> Text:
     return text
 
 
-def _table(services: list[Registration]) -> Table:
+def _holder(service: Registration) -> Text:
+    gone = service.holder == GONE
+    return Text(service.holder or "-", style=theme.EMBER if gone else theme.MOSS)
+
+
+def _table(services: list[Registration], *, holders: bool = False) -> Table:
     table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
-    for column in ("SERVICE", "KIND", "PROJECT", "ADDRESS", "PID"):
+    columns = ["SERVICE", "KIND", "PROJECT", "ADDRESS", "PID"]
+    if holders:
+        columns.append("HOLDER")
+    for column in columns:
         table.add_column(column)
     for service in services:
-        table.add_row(
+        row = [
             service.name,
             Text(service.kind, style=theme.kind_colour(service.kind)),
             Text(service.project or "-", style=theme.BONE_DIM),
             _address(service),
             Text(str(service.pid) if service.pid else "-", style=theme.BONE_DIM),
-        )
+        ]
+        if holders:
+            row.append(_holder(service))
+        table.add_row(*row)
     return table
 
 
@@ -480,6 +491,12 @@ def _fleet_table(services: list[FleetRegistration]) -> Table:
 def list_services(
     project: Annotated[str | None, typer.Option(help="Only this project.")] = None,
     kind: Annotated[str | None, typer.Option(help="Only this kind of service.")] = None,
+    holders: Annotated[
+        bool, typer.Option("--holders", help="Also say whether each holder is still there.")
+    ] = False,
+    stale: Annotated[
+        bool, typer.Option("--stale", help="Only services whose holder is gone.")
+    ] = False,
     every: Annotated[
         bool, typer.Option("--all", help="Ask every warden in the fleet, not just this one.")
     ] = False,
@@ -488,6 +505,12 @@ def list_services(
     as_json: JsonOption = False,
 ) -> None:
     """List every registered service."""
+    holders = holders or stale
+    if holders and every:
+        raise _fail(
+            WardenError("a holder can only be checked on the machine it runs on, so --holders "
+                        "asks one warden at a time")
+        )
     with _client(url, token) as client:
         try:
             fleet = (
@@ -495,9 +518,16 @@ def list_services(
                 if every
                 else None
             )
-            services = fleet.services if fleet else client.services(project=project, kind=kind)
+            services = (
+                fleet.services
+                if fleet
+                else client.services(project=project, kind=kind, holders=holders)
+            )
         except WardenError as exc:
             raise _fail(exc) from exc
+
+    if stale:
+        services = [service for service in services if service.holder == GONE]
 
     if as_json:
         _dump(
@@ -507,7 +537,9 @@ def list_services(
         )
         return
     if services:
-        console.print(_fleet_table(services) if fleet else _table(services))
+        console.print(_fleet_table(services) if fleet else _table(services, holders=holders))
+    elif stale:
+        console.print("every registered service is still there", style=theme.BONE_DIM)
     else:
         console.print("nothing registered", style=theme.BONE_DIM)
 
@@ -522,6 +554,55 @@ def list_services(
         errors.print(
             f"{clash.name} is registered on {theme.listed(clash.nodes)}", style=theme.SHRIEKER
         )
+
+
+@app.command()
+def reap(
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Release them all without asking.")
+    ] = False,
+    url: UrlOption = None,
+    token: TokenOption = None,
+) -> None:
+    """Release the ports of services that are no longer there.
+
+    Never automatic: a service that is restarting would lose its port to a
+    timer, so which registrations go is a person's decision.
+    """
+    with _client(url, token) as client:
+        try:
+            gone = [
+                service
+                for service in client.services(holders=True)
+                if service.holder == GONE
+            ]
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+        if not gone:
+            console.print("every registered service is still there", style=theme.BONE_DIM)
+            return
+
+        released = 0
+        for service in gone:
+            reason = service.holder_reason or "it is no longer there"
+            if not yes and not typer.confirm(f"release {service.name}? {reason}"):
+                continue
+            try:
+                client.release(service.name)
+            except WardenError as exc:
+                errors.print(f"{service.name}: {exc}", style=theme.SHRIEKER)
+                continue
+            released += 1
+            if yes:
+                console.print(f"released {service.name} - {reason}")
+
+    console.print(
+        f"released {released} of {len(gone)}"
+        if released != len(gone)
+        else f"released {released}",
+        style=theme.BONE_DIM,
+    )
 
 
 @app.command()

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from warden.allocator import PortPool, is_bound
 from warden.errors import PoolExhaustedError, PortUnavailableError, UnknownServiceError
+from warden.listeners import bound_ports, holding
 from warden.models import (
     HeartbeatRequest,
     PoolStatus,
@@ -29,6 +30,19 @@ class Registry:
     def list(self, *, project: str | None = None, kind: str | None = None) -> list[Registration]:
         self.store.purge_expired(utcnow())
         return self.store.list(project=project, kind=kind)
+
+    def with_holders(self, registrations: list[Registration]) -> list[Registration]:
+        """The same registrations, each saying whether whoever asked is still there."""
+        now = utcnow()
+        bound = bound_ports()
+        filled = []
+        for registration in registrations:
+            since = (now - registration.updated_at).total_seconds()
+            holder, reason = holding(registration.port, registration.pid, since, bound)
+            filled.append(
+                registration.model_copy(update={"holder": holder, "holder_reason": reason})
+            )
+        return filled
 
     def get(self, name: str) -> Registration:
         self.store.purge_expired(utcnow())

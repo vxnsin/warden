@@ -68,6 +68,9 @@ class Registration(BaseModel):
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None
+    # Both only filled when they were asked for; the sweep costs a syscall.
+    holder: str | None = None
+    holder_reason: str | None = None
 
     @property
     def address(self) -> str:

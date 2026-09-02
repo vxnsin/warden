@@ -94,6 +94,40 @@ def holder_of(port: int, *, udp: bool = True) -> Listener | None:
     return next((row for row in matches if row.pid is not None), matches[0])
 
 
+RUNNING = "running"
+GONE = "gone"
+
+# A service that registered a moment ago may not have bound its socket yet.
+# Calling that dead would be worse than saying nothing.
+SETTLING = 30
+
+
+def bound_ports() -> set[int]:
+    """Every port something is currently listening on, in one sweep."""
+    return {row.port for row in listeners()}
+
+
+def holding(
+    port: int, pid: int | None, since: float, bound: set[int]
+) -> tuple[str, str | None]:
+    """Whether whoever asked for this port still appears to be there, and why not.
+
+    Two signals, either of which is enough: the process it named is gone, or
+    nothing is listening on the port at all.
+    """
+    if since < SETTLING:
+        return RUNNING, None
+    dead = pid is not None and not psutil.pid_exists(pid)
+    silent = port not in bound
+    if dead and silent:
+        return GONE, f"nothing is on {port} and pid {pid} is gone"
+    if dead:
+        return GONE, f"pid {pid} is gone and {port} is held by something else"
+    if silent:
+        return GONE, f"nothing is listening on {port}"
+    return RUNNING, None
+
+
 def stop(pid: int, *, force: bool = False, timeout: float = 5.0) -> str:
     """End a process and return its name."""
     if pid in SYSTEM_PIDS:

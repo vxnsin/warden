@@ -141,9 +141,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @reads.get("/services", summary="List registered services")
     def list_services(
-        manager: Manager, project: str | None = None, kind: str | None = None
+        manager: Manager,
+        project: str | None = None,
+        kind: str | None = None,
+        holders: bool = False,
     ) -> list[Registration]:
-        return manager.list(project=project, kind=kind)
+        found = manager.list(project=project, kind=kind)
+        return manager.with_holders(found) if holders else found
 
     @v1.post(
         "/services",

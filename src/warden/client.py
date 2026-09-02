@@ -123,9 +123,17 @@ class WardenClient:
         return Registration.model_validate(self._request("GET", f"/v1/services/{name}"))
 
     def services(
-        self, *, project: str | None = None, kind: str | None = None
+        self,
+        *,
+        project: str | None = None,
+        kind: str | None = None,
+        holders: bool = False,
     ) -> list[Registration]:
-        params = {key: value for key, value in (("project", project), ("kind", kind)) if value}
+        params: dict[str, str | bool] = {
+            key: value for key, value in (("project", project), ("kind", kind)) if value
+        }
+        if holders:
+            params["holders"] = True
         payload = self._request("GET", "/v1/services", params=params)
         return [Registration.model_validate(item) for item in payload]
 
