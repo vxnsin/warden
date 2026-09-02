@@ -29,6 +29,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      # A version number on PyPI can never be reused, so a tag that disagrees
+      # with pyproject.toml has to stop here rather than upload the wrong one.
+      - name: Check the tag against the version
+        run: |
+          version=$(python3 -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match version $version in pyproject.toml" >&2
+            exit 1
+          fi
       - run: uv build
       - uses: actions/upload-artifact@v4
         with:
