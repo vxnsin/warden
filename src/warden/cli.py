@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, get_type_hints
 
@@ -10,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from warden import __version__, config, theme
+from warden import __version__, config, runner, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
@@ -239,6 +241,109 @@ def settings_unset(field: str) -> None:
     del stored[field]
     config.write(stored)
     console.print(f"{field} removed, back to its default", style=theme.BONE_DIM)
+
+
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def run(
+    ctx: typer.Context,
+    name: Annotated[str | None, typer.Option(help="Register under this name.")] = None,
+    kind: Annotated[str, typer.Option("--kind", "-k", help="What the service is.")] = "service",
+    project: Annotated[str | None, typer.Option(help="Group services of one codebase.")] = None,
+    host: Annotated[str, typer.Option(help="Interface the process will bind to.")] = "127.0.0.1",
+    preferred_port: Annotated[
+        int | None, typer.Option(help="Wish for this port, take another if it is not free.")
+    ] = None,
+    require_port: Annotated[
+        int | None, typer.Option(help="Insist on this port, and fail if it is not free.")
+    ] = None,
+    ttl: Annotated[
+        int | None, typer.Option(help="Hold a lease this long, renewed while the process runs.")
+    ] = None,
+    anyway: Annotated[
+        bool, typer.Option("--anyway", help="Start on a free port when no warden answers.")
+    ] = False,
+    url: UrlOption = None,
+    token: TokenOption = None,
+) -> None:
+    """Start a command on a port warden picked for it.
+
+    Everything after `--` is the command. The process gets PORT in its
+    environment, keeps the port while it runs, and gives it back when it exits.
+    """
+    command = list(ctx.args)
+    if not command:
+        raise _fail(WardenError("nothing to run - put the command after `--`"))
+
+    name = name or runner.default_name()
+    client = _client(url, token)
+    try:
+        service = client.register(
+            name,
+            kind=kind,
+            project=project,
+            host=host,
+            preferred_port=preferred_port,
+            require_port=require_port,
+            ttl=ttl,
+        )
+        registered = True
+    except WardenError as exc:
+        if not anyway:
+            errors.print(exc.message, style=theme.EMBER)
+            errors.print("or pass --anyway to start on a free port", style=theme.BONE_DIM)
+            client.close()
+            raise typer.Exit(1) from exc
+        service = _unregistered(name, kind, host)
+        registered = False
+
+    _announce(service, registered)
+    beat = None
+    if registered and ttl:
+        beat = runner.Heartbeat(client, name, ttl)
+        beat.start()
+    def note_pid(pid: int) -> None:
+        with suppress(WardenError):
+            client.heartbeat(name, pid=pid, ttl=ttl)
+
+    try:
+        code = runner.supervise(command, service, note_pid if registered else None)
+    finally:
+        # In a finally so a crash, a clean exit and Ctrl-C all give the port back.
+        if beat:
+            beat.stop()
+        if registered:
+            with suppress(WardenError):
+                client.release(name)
+        client.close()
+    raise typer.Exit(code)
+
+
+def _unregistered(name: str, kind: str, host: str) -> Registration:
+    now = datetime.now(UTC)
+    return Registration(
+        name=name,
+        kind=kind,
+        project=None,
+        host=host,
+        port=runner.free_port(host),
+        pid=None,
+        meta={},
+        ttl=None,
+        created_at=now,
+        updated_at=now,
+        expires_at=None,
+    )
+
+
+def _announce(service: Registration, registered: bool) -> None:
+    line = Text(service.name, style=theme.BONE)
+    line.append("  ->  ", style=theme.VEIN_BRIGHT)
+    line.append(str(service.port), style=theme.GLOW)
+    if not registered:
+        line.append("   unregistered, no warden running", style=theme.SHRIEKER)
+    errors.print(line)
 
 
 @app.command()

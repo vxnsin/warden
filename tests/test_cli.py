@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -7,7 +8,7 @@ from warden import __version__, cli, theme
 from warden.cli import app
 from warden.models import FleetListener, FleetListeners
 
-runner = CliRunner()
+runner_cli = CliRunner()
 
 
 def socket_on(node: str, port: int) -> FleetListener:
@@ -34,27 +35,27 @@ def fleet_ports(monkeypatch: pytest.MonkeyPatch) -> FleetListeners:
 
 
 def test_the_bare_command_introduces_itself():
-    result = runner.invoke(app, [])
+    result = runner_cli.invoke(app, [])
     assert result.exit_code == 0
     assert theme.TAGLINE in result.output
     assert "Usage" in result.output
 
 
 def test_the_bare_command_still_lists_what_it_can_do():
-    result = runner.invoke(app, [])
+    result = runner_cli.invoke(app, [])
     for command in ("serve", "tui", "ls", "register", "release"):
         assert command in result.output
 
 
 def test_the_version_is_printed_on_its_own():
-    result = runner.invoke(app, ["--version"])
+    result = runner_cli.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert result.output.strip() == __version__
     assert theme.TAGLINE not in result.output
 
 
 def test_a_port_filter_narrows_the_fleet_table(fleet_ports: FleetListeners):
-    result = runner.invoke(app, ["ports", "--all", "--port", "3000"])
+    result = runner_cli.invoke(app, ["ports", "--all", "--port", "3000"])
     assert result.exit_code == 0
     assert "3000" in result.output
     assert "9000" not in result.output
@@ -63,13 +64,35 @@ def test_a_port_filter_narrows_the_fleet_table(fleet_ports: FleetListeners):
 def test_a_port_filter_narrows_the_json_of_a_fleet_listing_too(fleet_ports: FleetListeners):
     # The table and --json answer the same question, so they must not disagree
     # about which rows the filter left.
-    result = runner.invoke(app, ["ports", "--all", "--port", "3000", "--json"])
+    result = runner_cli.invoke(app, ["ports", "--all", "--port", "3000", "--json"])
     assert result.exit_code == 0
     body = json.loads(result.output)
     assert [item["port"] for item in body["listeners"]] == [3000]
 
 
 def test_without_a_port_filter_the_whole_fleet_is_dumped(fleet_ports: FleetListeners):
-    result = runner.invoke(app, ["ports", "--all", "--json"])
+    result = runner_cli.invoke(app, ["ports", "--all", "--json"])
     body = json.loads(result.output)
     assert [item["port"] for item in body["listeners"]] == [9000, 3000]
+
+
+def test_run_needs_something_to_run():
+    result = runner_cli.invoke(app, ["run"])
+    assert result.exit_code == 1
+    assert "after `--`" in result.output
+
+
+def test_run_refuses_when_no_warden_answers(monkeypatch):
+    monkeypatch.setenv("WARDEN_URL", "http://127.0.0.1:9")
+    result = runner_cli.invoke(app, ["run", "--", sys.executable, "-c", "pass"])
+    assert result.exit_code == 1
+    assert "--anyway" in result.output
+
+
+def test_run_says_nothing_is_registered_when_it_carries_on_anyway(monkeypatch):
+    monkeypatch.setenv("WARDEN_URL", "http://127.0.0.1:9")
+    result = runner_cli.invoke(
+        app, ["run", "--anyway", "--", sys.executable, "-c", "pass"]
+    )
+    assert result.exit_code == 0
+    assert "unregistered" in result.output
