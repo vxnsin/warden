@@ -39,11 +39,13 @@ def test_our_own_socket_is_traced_back_to_this_process(bound_port: int):
     assert holder.address == f"127.0.0.1:{bound_port}"
 
 
-def test_a_free_port_has_no_holder():
+def test_a_port_with_nothing_listening_has_no_holder():
+    # Held open but never listened on, so nothing else can take the number
+    # while the assertion runs. Releasing it first would leave a gap the
+    # operating system is free to hand the port out in.
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        free = sock.getsockname()[1]
-    assert holder_of(free) is None
+        assert holder_of(sock.getsockname()[1]) is None
 
 
 def test_udp_sockets_can_be_left_out():
