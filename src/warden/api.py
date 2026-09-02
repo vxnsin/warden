@@ -16,9 +16,9 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
-from warden import __version__, aggregate, updates
+from warden import __version__, aggregate, metrics, updates
 from warden.allocator import PortPool
 from warden.config import Settings
 from warden.errors import NotPermittedError, WardenError
@@ -478,6 +478,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(nodes)
     app.include_router(fleet_view)
     app.include_router(fleet_writes)
+
+    @app.get(
+        "/metrics",
+        summary="Prometheus metrics",
+        tags=["meta"],
+        dependencies=[Depends(known_caller)],
+        response_class=PlainTextResponse,
+    )
+    def prometheus(manager: Manager, fleet: FleetDep) -> Response:
+        """Behind the same token as every other read.
+
+        Left open on a warden bound to 0.0.0.0 this would hand out the shape of
+        the whole fleet to anyone who asked.
+        """
+        return PlainTextResponse(
+            metrics.render(
+                pool=manager.pool_status(),
+                services=manager.list(),
+                nodes=fleet.nodes(),
+                version=__version__,
+                node=settings.node,
+                role=settings.role,
+            ),
+            media_type=metrics.CONTENT_TYPE,
+        )
 
     @app.get("/health", summary="Liveness probe", tags=["meta"])
     def health(manager: Manager, fleet: FleetDep) -> Health:
