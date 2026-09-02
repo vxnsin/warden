@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from warden import __version__, config, runner, theme
+from warden import __version__, config, health, runner, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
@@ -554,6 +554,36 @@ def list_services(
         errors.print(
             f"{clash.name} is registered on {theme.listed(clash.nodes)}", style=theme.SHRIEKER
         )
+
+
+@app.command()
+def doctor(
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Check everything at once and say what is wrong.
+
+    Exits 1 only when something failed, so a warning about an unset token does
+    not make a health check call the machine down.
+    """
+    with _client(url, token) as client:
+        checks = health.examine(client, Settings())
+
+    if as_json:
+        _dump([{"level": check.level, "text": check.text} for check in checks])
+    else:
+        # A table, so a line that wraps keeps its second half under the text
+        # rather than under the level it belongs to.
+        report = Table(box=None, pad_edge=False, show_header=False)
+        report.add_column(no_wrap=True)
+        report.add_column(overflow="fold")
+        for check in checks:
+            report.add_row(
+                Text(check.level, style=health.LEVEL_COLOURS[check.level]), check.text
+            )
+        console.print(report)
+    raise typer.Exit(health.exit_code(checks))
 
 
 @app.command()

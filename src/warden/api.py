@@ -21,6 +21,7 @@ from warden.models import (
     FleetRegistration,
     FleetServices,
     FleetUpdate,
+    Health,
     HeartbeatRequest,
     Listener,
     Node,
@@ -459,14 +460,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(fleet_writes)
 
     @app.get("/health", summary="Liveness probe", tags=["meta"])
-    def health(manager: Manager, fleet: FleetDep) -> dict[str, object]:
-        return {
-            "status": "ok",
-            "version": __version__,
-            "node": settings.node,
-            "role": settings.role,
-            "services": manager.store.count(),
-            "nodes": fleet.count(),
-        }
+    def health(manager: Manager, fleet: FleetDep) -> Health:
+        return Health(
+            status="ok",
+            version=__version__,
+            node=settings.node,
+            role=settings.role,
+            services=manager.store.count(),
+            nodes=fleet.count(),
+        )
 
     return app

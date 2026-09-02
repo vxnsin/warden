@@ -22,6 +22,7 @@ from warden.models import (
     FleetRegistration,
     FleetServices,
     FleetUpdate,
+    Health,
     Listener,
     Node,
     PoolStatus,
@@ -157,6 +158,10 @@ class WardenClient:
     def release(self, name: str, *, node: str | None = None) -> None:
         path = f"/v1/fleet/services/{node}/{name}" if node else f"/v1/services/{name}"
         self._request("DELETE", path)
+
+    def health(self) -> Health:
+        """What the warden says about itself, without needing a token."""
+        return Health.model_validate(self._request("GET", "/health"))
 
     def pool(self) -> PoolStatus:
         return PoolStatus.model_validate(self._request("GET", "/v1/pool"))

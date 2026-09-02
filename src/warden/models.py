@@ -144,6 +144,17 @@ class Node(BaseModel):
         return f"{self.pool_start}-{self.pool_end}"
 
 
+class Health(BaseModel):
+    """What a warden says about itself when asked whether it is there."""
+
+    status: str
+    version: str
+    node: str
+    role: str
+    services: int
+    nodes: int
+
+
 class UpdateStatus(BaseModel):
     """Whether a newer warden exists, or why that is not known."""
 
