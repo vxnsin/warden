@@ -1,0 +1,56 @@
+# A hub with two nodes reporting to it.
+#
+#   WARDEN_TOKEN=... WARDEN_CLUSTER_TOKEN=... docker compose up
+#   docker compose exec hub warden nodes
+#
+# Worth knowing before this is used for anything real: a warden in a container
+# sees the container's ports, not the host's. Probing and `warden ports`
+# describe the network namespace they run in, so a warden that is meant to
+# manage the host's ports needs `network_mode: host` - and then it is on the
+# host's network, where WARDEN_TOKEN is the only thing between it and whoever
+# else is on that network.
+
+services:
+  hub:
+    build: .
+    environment:
+      WARDEN_NODE: hub
+      WARDEN_TOKEN: ${WARDEN_TOKEN:?set WARDEN_TOKEN to something only you know}
+      WARDEN_CLUSTER_TOKEN: ${WARDEN_CLUSTER_TOKEN:?set WARDEN_CLUSTER_TOKEN too}
+    ports:
+      - "127.0.0.1:7010:7010"
+    volumes:
+      - hub-data:/data
+
+  build-01:
+    build: .
+    environment:
+      WARDEN_NODE: build-01
+      WARDEN_UPSTREAM: http://hub:7010
+      WARDEN_ADVERTISE: http://build-01:7010
+      WARDEN_TOKEN: ${WARDEN_TOKEN:?set WARDEN_TOKEN to something only you know}
+      WARDEN_CLUSTER_TOKEN: ${WARDEN_CLUSTER_TOKEN:?set WARDEN_CLUSTER_TOKEN too}
+    volumes:
+      - build-01-data:/data
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  build-02:
+    build: .
+    environment:
+      WARDEN_NODE: build-02
+      WARDEN_UPSTREAM: http://hub:7010
+      WARDEN_ADVERTISE: http://build-02:7010
+      WARDEN_TOKEN: ${WARDEN_TOKEN:?set WARDEN_TOKEN to something only you know}
+      WARDEN_CLUSTER_TOKEN: ${WARDEN_CLUSTER_TOKEN:?set WARDEN_CLUSTER_TOKEN too}
+    volumes:
+      - build-02-data:/data
+    depends_on:
+      hub:
+        condition: service_healthy
+
+volumes:
+  hub-data:
+  build-01-data:
+  build-02-data:
