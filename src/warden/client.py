@@ -17,6 +17,8 @@ from warden.errors import (
     WardenError,
 )
 from warden.models import (
+    FleetListeners,
+    FleetPool,
     FleetRegistration,
     FleetServices,
     FleetUpdate,
@@ -39,7 +41,8 @@ def resolve_url(url: str | None = None) -> str:
     return (url or os.environ.get("WARDEN_URL") or DEFAULT_URL).rstrip("/")
 
 
-def _detail(response: httpx.Response) -> str:
+def detail_of(response: httpx.Response) -> str:
+    """The message a warden put in an error, whatever shape it arrived in."""
     try:
         body = response.json()
     except ValueError:
@@ -92,7 +95,13 @@ class WardenClient:
         pid: int | None = None,
         ttl: int | None = None,
         meta: dict[str, str] | None = None,
+        node: str | None = None,
     ) -> Registration:
+        """Claim a port. With ``node``, on that warden in the fleet instead.
+
+        The named node still decides: only the machine itself can tell whether
+        a port is free. This warden just carries the question there.
+        """
         payload = {
             "name": name,
             "kind": kind,
@@ -104,6 +113,10 @@ class WardenClient:
             "ttl": ttl,
             "meta": meta or {},
         }
+        if node:
+            return FleetRegistration.model_validate(
+                self._request("POST", f"/v1/fleet/services/{node}", json=payload)
+            )
         return Registration.model_validate(self._request("POST", "/v1/services", json=payload))
 
     def lookup(self, name: str) -> Registration:
@@ -117,15 +130,25 @@ class WardenClient:
         return [Registration.model_validate(item) for item in payload]
 
     def heartbeat(
-        self, name: str, *, pid: int | None = None, ttl: int | None = None
+        self,
+        name: str,
+        *,
+        pid: int | None = None,
+        ttl: int | None = None,
+        node: str | None = None,
     ) -> Registration:
-        payload = self._request(
-            "POST", f"/v1/services/{name}/heartbeat", json={"pid": pid, "ttl": ttl}
+        path = (
+            f"/v1/fleet/services/{node}/{name}/heartbeat"
+            if node
+            else f"/v1/services/{name}/heartbeat"
         )
-        return Registration.model_validate(payload)
+        payload = self._request("POST", path, json={"pid": pid, "ttl": ttl})
+        model = FleetRegistration if node else Registration
+        return model.model_validate(payload)
 
-    def release(self, name: str) -> None:
-        self._request("DELETE", f"/v1/services/{name}")
+    def release(self, name: str, *, node: str | None = None) -> None:
+        path = f"/v1/fleet/services/{node}/{name}" if node else f"/v1/services/{name}"
+        self._request("DELETE", path)
 
     def pool(self) -> PoolStatus:
         return PoolStatus.model_validate(self._request("GET", "/v1/pool"))
@@ -135,8 +158,9 @@ class WardenClient:
         payload = self._request("GET", "/v1/listeners", params={"udp": udp})
         return [Listener.model_validate(item) for item in payload]
 
-    def stop(self, pid: int, *, force: bool = False) -> None:
-        self._request("DELETE", f"/v1/listeners/{pid}", params={"force": force})
+    def stop(self, pid: int, *, force: bool = False, node: str | None = None) -> None:
+        path = f"/v1/fleet/listeners/{node}/{pid}" if node else f"/v1/listeners/{pid}"
+        self._request("DELETE", path, params={"force": force})
 
     def nodes(self) -> list[Node]:
         """Every warden this one knows about."""
@@ -165,6 +189,16 @@ class WardenClient:
         return FleetServices.model_validate(
             self._request("GET", "/v1/fleet/services", params=params)
         )
+
+    def fleet_listeners(self, *, udp: bool = True) -> FleetListeners:
+        """Every socket bound anywhere in the fleet, each saying on which machine."""
+        return FleetListeners.model_validate(
+            self._request("GET", "/v1/fleet/listeners", params={"udp": udp})
+        )
+
+    def fleet_pool(self) -> FleetPool:
+        """Every node's pool, and what the fleet has left altogether."""
+        return FleetPool.model_validate(self._request("GET", "/v1/fleet/pool"))
 
     def update_status(self) -> UpdateStatus:
         """Whether the warden you are talking to knows of a newer one."""
@@ -203,7 +237,7 @@ class WardenClient:
                 f"no warden reachable at {self.url} - start one with 'warden serve'"
             ) from exc
         if response.is_error:
-            raise _STATUS_ERRORS.get(response.status_code, WardenError)(_detail(response))
+            raise _STATUS_ERRORS.get(response.status_code, WardenError)(detail_of(response))
         if response.status_code == httpx.codes.NO_CONTENT:
             return None
         return response.json()

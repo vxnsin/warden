@@ -16,6 +16,8 @@ from warden.fleet import Fleet
 from warden.listeners import listeners, stop
 from warden.models import (
     ErrorResponse,
+    FleetListeners,
+    FleetPool,
     FleetRegistration,
     FleetServices,
     FleetUpdate,
@@ -258,6 +260,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 kind=kind,
             )
 
+    @fleet_view.get("/pool", summary="How much of its pool every node has left")
+    async def fleet_pool(manager: Manager, fleet: FleetDep) -> FleetPool:
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.gather_pools(
+                http, fleet.nodes(), here=settings.node, local=manager.pool_status()
+            )
+
+    @fleet_view.get("/listeners", summary="Every socket bound anywhere in the fleet")
+    async def fleet_listeners(fleet: FleetDep, udp: bool = True) -> FleetListeners:
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.gather_listeners(
+                http, fleet.nodes(), here=settings.node, local=listeners(udp=udp), udp=udp
+            )
+
     @fleet_view.get(
         "/services/{node}/{name}",
         summary="One service on one named node",
@@ -270,6 +286,109 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return FleetRegistration(node=node, **manager.get(name).model_dump())
         async with aggregate.client(settings.cluster_token) as http:
             return await aggregate.lookup_on(http, fleet.nodes(), node, name)
+
+    # Its own router, guarded like any other change: the cluster token reads and
+    # announces, and forwarding a registration through the hub must not become
+    # the one way it can write. The caller's own authorization goes with it.
+    fleet_writes = APIRouter(
+        prefix="/v1/fleet", tags=["fleet"], dependencies=[Depends(authorize)]
+    )
+
+    @fleet_writes.post(
+        "/services/{node}",
+        summary="Register a service on one named node",
+        status_code=status.HTTP_201_CREATED,
+        responses={
+            status.HTTP_200_OK: {"description": "Registration renewed"},
+            status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+            status.HTTP_409_CONFLICT: {"model": ErrorResponse},
+            status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse},
+        },
+    )
+    async def register_there(
+        node: str,
+        request: RegistrationRequest,
+        manager: Manager,
+        fleet: FleetDep,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> FleetRegistration:
+        if node == settings.node:
+            registration, created = manager.register(request)
+            response.status_code = (
+                status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            )
+            return FleetRegistration(node=node, **registration.model_dump())
+        async with aggregate.relaying(authorization) as http:
+            registration, created = await aggregate.register_on(
+                http, fleet.nodes(), node, request.model_dump(mode="json")
+            )
+        response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return registration
+
+    @fleet_writes.post(
+        "/services/{node}/{name}/heartbeat",
+        summary="Extend a registration on one named node",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def heartbeat_there(
+        node: str,
+        name: str,
+        request: HeartbeatRequest,
+        manager: Manager,
+        fleet: FleetDep,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> FleetRegistration:
+        if node == settings.node:
+            return FleetRegistration(node=node, **manager.heartbeat(name, request).model_dump())
+        async with aggregate.relaying(authorization) as http:
+            return await aggregate.heartbeat_on(
+                http, fleet.nodes(), node, name, request.model_dump(mode="json")
+            )
+
+    @fleet_writes.delete(
+        "/services/{node}/{name}",
+        summary="Release a port on one named node",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def release_there(
+        node: str,
+        name: str,
+        manager: Manager,
+        fleet: FleetDep,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> None:
+        if node == settings.node:
+            manager.release(name)
+            return
+        async with aggregate.relaying(authorization) as http:
+            await aggregate.release_on(http, fleet.nodes(), node, name)
+
+    @fleet_writes.delete(
+        "/listeners/{node}/{pid}",
+        summary="Stop a process on one named node",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={
+            status.HTTP_403_FORBIDDEN: {"model": ErrorResponse},
+            status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+            status.HTTP_409_CONFLICT: {"model": ErrorResponse},
+        },
+    )
+    async def stop_there(
+        node: str,
+        pid: int,
+        fleet: FleetDep,
+        force: bool = False,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> None:
+        # Asked by node because a pid means nothing off the machine it is on.
+        # Each node keeps its own WARDEN_ALLOW_KILL; the hub opens nothing.
+        if node == settings.node:
+            stop_listener(pid, force=force)
+            return
+        async with aggregate.relaying(authorization) as http:
+            await aggregate.stop_on(http, fleet.nodes(), node, pid, force=force)
 
     @reads.get("/update", summary="Whether a newer warden exists")
     def update_status(request: Request) -> UpdateStatus:
@@ -313,6 +432,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(v1)
     app.include_router(nodes)
     app.include_router(fleet_view)
+    app.include_router(fleet_writes)
 
     @app.get("/health", summary="Liveness probe", tags=["meta"])
     def health(manager: Manager, fleet: FleetDep) -> dict[str, object]:

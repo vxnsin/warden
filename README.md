@@ -27,6 +27,8 @@ stopped node.exe (25084)
 
 Neither needs a warden running anywhere — they read the machine directly. The
 WARDEN column names the service whenever the port did come from the registry.
+`warden ports --all` asks every warden in the fleet instead, and adds a NODE
+column saying which machine each socket is on.
 
 Sockets owned by another user appear without a process name; run warden as
 administrator on Windows, or with `sudo` on Linux and macOS, to see those too.
@@ -61,7 +63,11 @@ To get `warden` as a command of its own, without the `uv run` in front:
 uv tool install .
 ```
 
-It is not on PyPI yet, so `uv tool install warden` by name does not work — see
+That works in cmd, PowerShell and any POSIX shell, from any directory.
+
+The distribution is called `warden-ports` because `warden` on PyPI belongs to
+something else; the command it installs is `warden` either way. It is not
+published yet, so installing by name does not work — see
 [#1](https://github.com/vxnsin/warden/issues/1).
 
 ## Quick start
@@ -127,6 +133,7 @@ handed out and what is actually listening:
 | --- | --- |
 | `↑` `↓` `j` `k` | Move |
 | `tab` | Switch between services and ports |
+| `n` | Step the filter through one node at a time (with `--all`) |
 | `r` | Reload now |
 | `d` | Release the service, or stop the process |
 | `q` | Quit |
@@ -135,6 +142,12 @@ The dashboard reads both tables from the warden it is pointed at, so the ports
 it lists are the ones on *that* machine. Stopping a process from here goes
 through the API and needs `WARDEN_ALLOW_KILL` (see below); `warden kill` on the
 command line is local and always works.
+
+`warden tui --all` points it at the whole fleet instead: both tables gain a NODE
+column, `n` steps through one warden at a time, and a node that did not answer
+is named at the bottom rather than being quietly left out. Releasing and
+stopping go to the machine the row is on — a pid means nothing anywhere else.
+Every refresh asks every node, so a large fleet is worth a longer `--interval`.
 
 ## From Python
 
@@ -194,6 +207,12 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | `DELETE` | `/v1/nodes/{name}` | Forget a warden |
 | `GET` | `/v1/fleet/services` | Everything the fleet holds, plus what did not answer |
 | `GET` | `/v1/fleet/services/{node}/{name}` | One service on one named node |
+| `GET` | `/v1/fleet/pool` | How much of its pool every node has left |
+| `GET` | `/v1/fleet/listeners` | Every socket bound anywhere in the fleet |
+| `POST` | `/v1/fleet/services/{node}` | Register on one named node, through this one |
+| `POST` | `/v1/fleet/services/{node}/{name}/heartbeat` | Extend a lease on one named node |
+| `DELETE` | `/v1/fleet/services/{node}/{name}` | Release a port on one named node |
+| `DELETE` | `/v1/fleet/listeners/{node}/{pid}` | Stop a process on one named node |
 | `GET` | `/v1/update` | Whether a newer warden exists |
 | `POST` | `/v1/update` | Ask this warden to update itself |
 | `POST` | `/v1/fleet/update` | Ask every warden in the fleet to update itself |
@@ -248,10 +267,11 @@ useful for test fixtures and CI, where nothing gets the chance to clean up:
 warden register ci-runner --kind worker --ttl 600
 ```
 
-`POST /v1/services/{name}/heartbeat` pushes the expiry out again. Sent without a
-`ttl` it renews the lease the service registered with, so a heartbeat can never
-turn a lease into a permanent registration by accident. Expired registrations are
-dropped on the next request that touches the registry.
+`warden heartbeat ci-runner`, or `POST /v1/services/{name}/heartbeat`, pushes the
+expiry out again. Sent without a `ttl` it renews the lease the service registered
+with, so a heartbeat can never turn a lease into a permanent registration by
+accident. Expired registrations are dropped on the next request that touches the
+registry.
 
 ## More than one machine
 
@@ -303,7 +323,56 @@ hub       hub-api       backend  shop     127.0.0.1:8000  -
 build-01 (http://build-01:7010) could not be reached
 ```
 
+A name is unique per node and never across the fleet, so this view is the only
+place a clash can show up at all. Two machines both holding a `shop-api` is
+nearly always two projects that drifted apart, and it is said out loud rather
+than left to be noticed:
+
+```
+shop-api is registered on build-01 and web-02
+```
+
 `warden get build-01/build-runner` asks one named node.
+
+`--node` puts a request through the hub to one particular warden, so a machine
+can be handed a port without a shell on it:
+
+```sh
+$ warden register build-runner --kind worker --node build-01 --url http://hub:7010
+9000
+$ warden release build-runner --node build-01 --url http://hub:7010
+released build-01/build-runner
+```
+
+The node still decides. Only the machine itself can try to bind a port, so
+probing keeps working exactly as it does locally, and what comes back refused
+comes back in that node's own words:
+
+```sh
+$ warden register legacy-crm --kind backend --require-port 3000 --node build-01
+port 3000 is held by 'grafana'
+```
+
+Forwarding takes `WARDEN_TOKEN`, never the cluster token, and the hub carries
+the caller's own authorization to the node rather than its own. A hub that
+could write with the cluster token would be the one door that token was never
+meant to open.
+
+`warden pool --all` does the same for capacity, so the machine about to run out
+is the one to look at rather than the one to find:
+
+```sh
+$ warden pool --all --url http://hub:7010
+NODE      POOL       HELD  FREE  RESERVED
+build-01  9000-9099    97     3         0
+hub       8000-8999     4   995         1
+
+2 wardens  101 allocated  998 free  of 1099
+```
+
+Every node keeps its own range, and two of them may well hand out the same
+numbers on different machines, so the total is a sum of what is left and never
+one pool the fleet shares.
 
 Wardens authenticate to each other with `WARDEN_CLUSTER_TOKEN`, separate from the
 `WARDEN_TOKEN` a person uses. The cluster token opens announcing and reading; it

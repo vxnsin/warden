@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -16,7 +15,7 @@ from textual.widgets import Button, DataTable, Label, Static
 from warden import theme
 from warden.client import WardenClient
 from warden.errors import WardenError
-from warden.models import Listener, PoolStatus, Registration
+from warden.models import FleetPool, Listener, PoolStatus, Registration, Unreachable
 
 SERVICES = "services"
 PORTS = "ports"
@@ -27,8 +26,14 @@ COLUMNS = {
 }
 HEADINGS = {SERVICES: "REGISTERED SERVICES", PORTS: "LISTENING PORTS"}
 
+SEP = "  ~  "
+
 # Below this height the banner would leave the table without room to show anything.
 BANNER_MIN_HEIGHT = 30
+
+# A hub asking its nodes waits up to aggregate.TIMEOUT for the slowest of them,
+# so a dashboard that gave up sooner would show a fleet permanently on fire.
+FLEET_TIMEOUT = 8.0
 
 PALETTE = {
     "sculk": theme.SCULK,
@@ -109,9 +114,8 @@ def _lease(moment: datetime | None) -> Text:
     seconds = int((moment - datetime.now(UTC)).total_seconds())
     if seconds <= 0:
         return Text("expired", style=theme.EMBER)
-    if seconds < 60:
-        return Text(f"{seconds}s left", style=theme.SHRIEKER)
-    return Text(f"{math.ceil(seconds / 60)}m left", style=theme.BONE)
+    style = theme.SHRIEKER if seconds < 60 else theme.BONE
+    return Text(f"{theme.until(moment)} left", style=style)
 
 
 def _address(registration: Registration) -> Text:
@@ -170,18 +174,28 @@ class WardenApp(App[None]):
         # Textual gives tab to focus movement by default; there is only one
         # focusable widget here, so the view switch is the better use for it.
         Binding("tab", "switch", "Switch view", priority=True),
+        Binding("n", "node", "Filter by node"),
         Binding("r", "refresh", "Reload"),
         Binding("d", "act", "Release/stop"),
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, client: WardenClient, interval: float = 2.0) -> None:
+    def __init__(
+        self, client: WardenClient, interval: float = 2.0, *, fleet: bool = False
+    ) -> None:
         super().__init__()
         self.client = client
         self.interval = interval
+        self.fleet = fleet
         self.view = SERVICES
-        self._names: list[str] = []
-        self._pids: list[int | None] = []
+        # None means every node. Cycling includes the ones that did not answer,
+        # so a machine that has gone quiet can still be singled out and seen.
+        self.only: str | None = None
+        self._services: list[Registration] = []
+        self._listeners: list[Listener] = []
+        # Not _nodes: that name belongs to Textual, for the widgets on screen.
+        self._node_names: list[str] = []
+        self._unreachable: list[Unreachable] = []
 
     def get_css_variables(self) -> dict[str, str]:
         return {**super().get_css_variables(), **PALETTE}
@@ -204,26 +218,51 @@ class WardenApp(App[None]):
     def on_resize(self, event: events.Resize) -> None:
         self.query_one("#banner", Static).display = event.size.height >= BANNER_MIN_HEIGHT
 
+    def _columns(self) -> tuple[str, ...]:
+        """The view's columns, with NODE behind the number when there is a fleet."""
+        first, *rest = COLUMNS[self.view]
+        return (first, "NODE", *rest) if self.fleet else (first, *rest)
+
+    def _heading(self) -> str:
+        if not self.fleet:
+            return HEADINGS[self.view]
+        return f"{HEADINGS[self.view]}{SEP}{(self.only or 'fleet').upper()}"
+
     def _lay_out(self) -> None:
         table = self.query_one(DataTable)
         table.clear(columns=True)
-        table.add_columns(*COLUMNS[self.view])
-        self.query_one("#section", Static).update(HEADINGS[self.view])
-        self.query_one("#hints", Static).update(
-            _hints(
-                ("up/down/j/k", "move"),
-                ("tab", "ports" if self.view == SERVICES else "services"),
-                ("r", "reload"),
-                ("d", "release" if self.view == SERVICES else "stop"),
-                ("q", "quit"),
-            )
-        )
+        table.add_columns(*self._columns())
+        self._label()
+
+    def _label(self) -> None:
+        """The heading and the key hints, which both follow the current filter."""
+        self.query_one("#section", Static).update(self._heading())
+        hints = [
+            ("up/down/j/k", "move"),
+            ("tab", "ports" if self.view == SERVICES else "services"),
+            ("r", "reload"),
+            ("d", "release" if self.view == SERVICES else "stop"),
+            ("q", "quit"),
+        ]
+        if self.fleet:
+            hints.insert(2, ("n", self.only or "every node"))
+        self.query_one("#hints", Static).update(_hints(*hints))
 
     def action_switch(self) -> None:
         self.view = PORTS if self.view == SERVICES else SERVICES
-        self._names = []
-        self._pids = []
+        self._services = []
+        self._listeners = []
         self._lay_out()
+        self.action_refresh()
+
+    def action_node(self) -> None:
+        """Step the filter on: everything, then one node at a time."""
+        if not self.fleet or not self._node_names:
+            return
+        order: list[str | None] = [None, *self._node_names]
+        step = order.index(self.only) + 1 if self.only in order else 0
+        self.only = order[step % len(order)]
+        self._label()
         self.action_refresh()
 
     def action_cursor_down(self) -> None:
@@ -235,51 +274,83 @@ class WardenApp(App[None]):
     def action_refresh(self) -> None:
         self.load()
 
+    def _node_of(self, row: object) -> str | None:
+        """Which warden a row belongs to, or None when there is only this one."""
+        return getattr(row, "node", None) if self.fleet else None
+
     def action_act(self) -> None:
         row = self.query_one(DataTable).cursor_row
         if row < 0:
             return
         if self.view == SERVICES:
-            if row >= len(self._names):
+            if row >= len(self._services):
                 return
-            name = self._names[row]
+            service = self._services[row]
+            node = self._node_of(service)
+            where = f"{node}/{service.name}" if node else service.name
             self.push_screen(
-                Confirm(f"Release the port held by '{name}'?", "Release"),
-                lambda confirmed: self.release(name) if confirmed else None,
+                Confirm(f"Release the port held by '{where}'?", "Release"),
+                lambda confirmed: self.release(service.name, node) if confirmed else None,
             )
             return
-        if row >= len(self._pids):
+        if row >= len(self._listeners):
             return
-        pid = self._pids[row]
-        if pid is None:
+        listener = self._listeners[row]
+        if listener.pid is None:
             self.show_error("that socket belongs to a process this user may not touch")
             return
+        # By node, never by number alone: the same pid on another machine is
+        # another process entirely, and this is the key that stops things.
+        node = self._node_of(listener)
+        pid = listener.pid
+        where = f"{pid} on {node}" if node else str(pid)
         self.push_screen(
-            Confirm(f"Stop process {pid}?", "Stop"),
-            lambda confirmed: self.stop(pid) if confirmed else None,
+            Confirm(f"Stop process {where}?", "Stop"),
+            lambda confirmed: self.stop(pid, node) if confirmed else None,
+        )
+
+    def _load_services(self) -> None:
+        if not self.fleet:
+            self.call_from_thread(
+                self.show_services, self.client.services(), self.client.pool()
+            )
+            return
+        found = self.client.fleet_services()
+        self.call_from_thread(
+            self.show_services, found.services, self.client.fleet_pool(), found.unreachable
+        )
+
+    def _load_ports(self) -> None:
+        if not self.fleet:
+            self.call_from_thread(
+                self.show_ports, self.client.listeners(), self.client.services()
+            )
+            return
+        found = self.client.fleet_listeners()
+        self.call_from_thread(
+            self.show_ports,
+            found.listeners,
+            self.client.fleet_services().services,
+            found.unreachable,
         )
 
     @work(exclusive=True, thread=True, group="load")
     def load(self) -> None:
         try:
             if self.view == SERVICES:
-                self.call_from_thread(
-                    self.show_services, self.client.services(), self.client.pool()
-                )
+                self._load_services()
             else:
-                self.call_from_thread(
-                    self.show_ports, self.client.listeners(), self.client.services()
-                )
+                self._load_ports()
         except WardenError as exc:
             self.call_from_thread(self.show_error, str(exc))
 
     @work(thread=True, group="act")
-    def release(self, name: str) -> None:
-        self._act(lambda: self.client.release(name))
+    def release(self, name: str, node: str | None = None) -> None:
+        self._act(lambda: self.client.release(name, node=node))
 
     @work(thread=True, group="act")
-    def stop(self, pid: int) -> None:
-        self._act(lambda: self.client.stop(pid))
+    def stop(self, pid: int, node: str | None = None) -> None:
+        self._act(lambda: self.client.stop(pid, node=node))
 
     def _act(self, action: Callable[[], None]) -> None:
         try:
@@ -293,66 +364,146 @@ class WardenApp(App[None]):
         if count:
             table.move_cursor(row=min(max(row, 0), count - 1))
 
-    def show_services(self, services: list[Registration], pool: PoolStatus) -> None:
+    def _remember(self, rows: list, unreachable: list[Unreachable]) -> None:
+        """What there is to cycle through, taken from the unfiltered answer.
+
+        Read after filtering, the list would shrink to whatever is showing and
+        there would be no way back out of a node.
+        """
+        self._unreachable = list(unreachable)
+        if not self.fleet:
+            return
+        seen = {getattr(row, "node", "") for row in rows} | {u.node for u in unreachable}
+        self._node_names = sorted(name for name in seen if name)
+
+    def _showing(self, rows: list) -> list:
+        if not self.only:
+            return rows
+        return [row for row in rows if getattr(row, "node", None) == self.only]
+
+    def _cells(self, index: int, node: str, *rest: object) -> tuple[object, ...]:
+        head = (_dim(index), node) if self.fleet else (_dim(index),)
+        return (*head, *rest)
+
+    def _missing(self, stats: Text) -> Text:
+        """Name the nodes that did not answer, rather than quietly showing less."""
+        if not self._unreachable:
+            return stats
+        names = theme.listed([node.node for node in self._unreachable])
+        stats.append(SEP, style=theme.VEIN_BRIGHT)
+        stats.append(f"{names} not answering", style=theme.SHRIEKER)
+        return stats
+
+    def _pool_stats(self, pool: PoolStatus | FleetPool) -> Text:
+        """Where the ports stand, for the fleet or for the node being filtered to."""
+        stats = Text()
+        showing: PoolStatus | FleetPool = pool
+        if isinstance(pool, FleetPool) and self.only:
+            here = next((one for one in pool.pools if one.node == self.only), None)
+            if here is None:
+                stats.append(f"{self.only} has not reported a pool", style=theme.BONE_DIM)
+                return self._missing(stats)
+            showing = here
+
+        if isinstance(showing, FleetPool):
+            stats.append(f"{len(showing.pools)} wardens", style=theme.BONE_DIM)
+            reserved = None
+        else:
+            stats.append(f"pool {showing.start}-{showing.end}", style=theme.BONE_DIM)
+            reserved = len(showing.reserved)
+
+        stats.append(SEP, style=theme.VEIN_BRIGHT)
+        stats.append(str(showing.allocated), style=theme.GLOW)
+        stats.append(" held", style=theme.BONE_DIM)
+        stats.append(SEP, style=theme.VEIN_BRIGHT)
+        stats.append(str(showing.available), style=theme.MOSS)
+        stats.append(" free", style=theme.BONE_DIM)
+        if reserved is not None:
+            stats.append(SEP, style=theme.VEIN_BRIGHT)
+            stats.append(f"{reserved} reserved", style=theme.BONE_DIM)
+        return self._missing(stats)
+
+    def show_services(
+        self,
+        services: list[Registration],
+        pool: PoolStatus | FleetPool,
+        unreachable: list[Unreachable] = (),
+    ) -> None:
+        self._remember(services, unreachable)
+        services = self._showing(services)
         table = self.query_one(DataTable)
         row = table.cursor_row
         table.clear()
-        self._names = [service.name for service in services]
+        self._services = services
         for index, service in enumerate(services, start=1):
             table.add_row(
-                _dim(index),
-                service.name,
-                Text(service.kind, style=theme.kind_colour(service.kind)),
-                _dim(service.project),
-                _address(service),
-                _dim(service.pid),
-                _lease(service.expires_at),
-                _dim(theme.age(service.updated_at)),
+                *self._cells(
+                    index,
+                    getattr(service, "node", ""),
+                    service.name,
+                    Text(service.kind, style=theme.kind_colour(service.kind)),
+                    _dim(service.project),
+                    _address(service),
+                    _dim(service.pid),
+                    _lease(service.expires_at),
+                    _dim(theme.age(service.updated_at)),
+                )
             )
         self._restore_cursor(table, row, len(services))
+        self._say(self._pool_stats(pool))
 
-        stats = Text()
-        stats.append(f"pool {pool.start}-{pool.end}", style=theme.BONE_DIM)
-        stats.append("  ~  ", style=theme.VEIN_BRIGHT)
-        stats.append(str(pool.allocated), style=theme.GLOW)
-        stats.append(" held", style=theme.BONE_DIM)
-        stats.append("  ~  ", style=theme.VEIN_BRIGHT)
-        stats.append(str(pool.available), style=theme.MOSS)
-        stats.append(" free", style=theme.BONE_DIM)
-        stats.append("  ~  ", style=theme.VEIN_BRIGHT)
-        stats.append(f"{len(pool.reserved)} reserved", style=theme.BONE_DIM)
-        self._say(stats)
-
-    def show_ports(self, rows: list[Listener], services: list[Registration]) -> None:
-        known = {(service.host, service.port): service.name for service in services}
+    def show_ports(
+        self,
+        rows: list[Listener],
+        services: list[Registration],
+        unreachable: list[Unreachable] = (),
+    ) -> None:
+        # Keyed by node as well: 3000 on two machines is two processes, and
+        # naming one after the other's service would simply be wrong.
+        known = {
+            (getattr(service, "node", ""), service.host, service.port): service.name
+            for service in services
+        }
+        self._remember(rows, unreachable)
+        rows = self._showing(rows)
         table = self.query_one(DataTable)
         row = table.cursor_row
         table.clear()
-        self._pids = [listener.pid for listener in rows]
+        self._listeners = rows
         for index, listener in enumerate(rows, start=1):
+            node = getattr(listener, "node", "")
             table.add_row(
-                _dim(index),
-                Text(str(listener.port), style=theme.GLOW),
-                _dim(listener.protocol),
-                listener.process or Text("unknown", style=theme.BONE_DIM),
-                _dim(listener.pid),
-                _dim(theme.account(listener.user)),
-                _dim(listener.host),
-                Text(known.get((listener.host, listener.port), "-"), style=theme.MOSS),
+                *self._cells(
+                    index,
+                    node,
+                    Text(str(listener.port), style=theme.GLOW),
+                    _dim(listener.protocol),
+                    listener.process or Text("unknown", style=theme.BONE_DIM),
+                    _dim(listener.pid),
+                    _dim(theme.account(listener.user)),
+                    _dim(listener.host),
+                    Text(
+                        known.get((node, listener.host, listener.port), "-"), style=theme.MOSS
+                    ),
+                )
             )
         self._restore_cursor(table, row, len(rows))
 
-        ours = sum(1 for listener in rows if (listener.host, listener.port) in known)
+        ours = sum(
+            1
+            for listener in rows
+            if (getattr(listener, "node", ""), listener.host, listener.port) in known
+        )
         hidden = sum(1 for listener in rows if listener.pid is None)
         stats = Text()
         stats.append(f"{len(rows)} listening", style=theme.BONE_DIM)
-        stats.append("  ~  ", style=theme.VEIN_BRIGHT)
+        stats.append(SEP, style=theme.VEIN_BRIGHT)
         stats.append(str(ours), style=theme.MOSS)
         stats.append(" handed out by warden", style=theme.BONE_DIM)
         if hidden:
-            stats.append("  ~  ", style=theme.VEIN_BRIGHT)
+            stats.append(SEP, style=theme.VEIN_BRIGHT)
             stats.append(f"{hidden} owned by another user", style=theme.SHRIEKER)
-        self._say(stats)
+        self._say(self._missing(stats))
 
     def _say(self, message: Text | str) -> None:
         stats = self.query_one("#stats", Static)
@@ -365,6 +516,13 @@ class WardenApp(App[None]):
         stats.update(message)
 
 
-def run(url: str | None = None, *, token: str | None = None, interval: float = 2.0) -> None:
-    with WardenClient(url, token=token, timeout=3.0) as client:
-        WardenApp(client, interval=interval).run()
+def run(
+    url: str | None = None,
+    *,
+    token: str | None = None,
+    interval: float = 2.0,
+    fleet: bool = False,
+) -> None:
+    timeout = FLEET_TIMEOUT if fleet else 3.0
+    with WardenClient(url, token=token, timeout=timeout) as client:
+        WardenApp(client, interval=interval, fleet=fleet).run()

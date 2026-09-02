@@ -179,6 +179,13 @@ class Unreachable(BaseModel):
     reason: str
 
 
+class Duplicate(BaseModel):
+    """A name more than one node hands out."""
+
+    name: str
+    nodes: list[str]
+
+
 class FleetServices(BaseModel):
     """What the fleet holds, and what could not be asked.
 
@@ -189,6 +196,52 @@ class FleetServices(BaseModel):
 
     services: list[FleetRegistration]
     unreachable: list[Unreachable]
+    duplicates: list[Duplicate] = Field(default_factory=list)
+
+
+class FleetListener(Listener):
+    """A socket, and the machine it is bound on."""
+
+    node: str
+
+
+class FleetListeners(BaseModel):
+    """Every socket the fleet reports, and the machines that did not report."""
+
+    listeners: list[FleetListener]
+    unreachable: list[Unreachable]
+
+
+class NodePool(PoolStatus):
+    """One node's pool, and whose it is."""
+
+    node: str
+
+
+class FleetPool(BaseModel):
+    """Every node's pool, and what the fleet has left altogether.
+
+    The totals count ports that may actually be handed out, so a range with
+    half of it reserved does not read as capacity anyone can have.
+    """
+
+    pools: list[NodePool]
+    unreachable: list[Unreachable]
+
+    @computed_field
+    @property
+    def allocated(self) -> int:
+        return sum(pool.allocated for pool in self.pools)
+
+    @computed_field
+    @property
+    def available(self) -> int:
+        return sum(pool.available for pool in self.pools)
+
+    @computed_field
+    @property
+    def capacity(self) -> int:
+        return sum(pool.allocated + pool.available for pool in self.pools)
 
 
 class ErrorResponse(BaseModel):

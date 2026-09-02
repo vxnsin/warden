@@ -14,7 +14,15 @@ from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
 from warden.listeners import holder_of, listeners, stop
-from warden.models import FleetRegistration, FleetUpdate, Registration, UpdateStatus
+from warden.models import (
+    FleetListeners,
+    FleetPool,
+    FleetRegistration,
+    FleetUpdate,
+    PoolStatus,
+    Registration,
+    UpdateStatus,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -33,6 +41,10 @@ TokenOption = Annotated[
                  envvar="WARDEN_TOKEN"),
 ]
 JsonOption = Annotated[bool, typer.Option("--json", help="Print raw JSON.")]
+NodeOption = Annotated[
+    str | None,
+    typer.Option("--node", help="Do this on that warden in the fleet, through this one."),
+]
 
 
 def _client(url: str | None, token: str | None) -> WardenClient:
@@ -141,14 +153,22 @@ def serve(
 
 @app.command()
 def tui(
+    every: Annotated[
+        bool, typer.Option("--all", help="Show the whole fleet, not just this warden.")
+    ] = False,
     url: UrlOption = None,
     token: TokenOption = None,
     interval: Annotated[float, typer.Option(help="Refresh interval in seconds.")] = 2.0,
 ) -> None:
-    """Open the terminal dashboard."""
+    """Open the terminal dashboard.
+
+    With `--all` both tables gain a NODE column and `n` steps the view through
+    one warden at a time. A large fleet is worth a longer `--interval`, since
+    every refresh asks every node.
+    """
     from warden.tui import run
 
-    run(url, token=token, interval=interval)
+    run(url, token=token, interval=interval, fleet=every)
 
 
 def _fleet_table(services: list[FleetRegistration]) -> Table:
@@ -207,6 +227,13 @@ def list_services(
     for missing in fleet.unreachable if fleet else []:
         errors.print(f"{missing.node} ({missing.url}) {missing.reason}", style=theme.SHRIEKER)
 
+    # Unique is a promise each node makes on its own, so a name held twice is
+    # only ever visible from here - and it is nearly always a mistake.
+    for clash in fleet.duplicates if fleet else []:
+        errors.print(
+            f"{clash.name} is registered on {theme.listed(clash.nodes)}", style=theme.SHRIEKER
+        )
+
 
 @app.command()
 def get(
@@ -251,11 +278,16 @@ def register(
         int | None, typer.Option(help="Release the port again after this many seconds.")
     ] = None,
     pid: Annotated[int | None, typer.Option(help="Process id of the service.")] = None,
+    node: NodeOption = None,
     url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Claim a port and print it."""
+    """Claim a port and print it.
+
+    With `--node` the request goes through this warden to that one, which is
+    still the machine that decides.
+    """
     with _client(url, token) as client:
         try:
             service = client.register(
@@ -267,6 +299,7 @@ def register(
                 require_port=require_port,
                 ttl=ttl,
                 pid=pid,
+                node=node,
             )
         except WardenError as exc:
             raise _fail(exc) from exc
@@ -278,58 +311,97 @@ def register(
 
 
 
-def _registered_names(url: str | None, token: str | None) -> dict[tuple[str, int], str]:
+Owners = dict[tuple[str, str, int], str]
+
+
+def _registered_names(url: str | None, token: str | None) -> Owners:
     """Which sockets warden itself handed out, so strangers stand out in the list.
 
     A warden need not be running for `warden ports` to work at all, so a registry
-    that cannot be reached simply adds nothing.
+    that cannot be reached simply adds nothing. Keyed by node as well: the same
+    port on two machines is two processes, and naming one after the other would
+    be wrong rather than merely unhelpful.
     """
     try:
         with _client(url, token) as client:
-            return {(service.host, service.port): service.name for service in client.services()}
+            return {("", s.host, s.port): s.name for s in client.services()}
     except WardenError:
         return {}
 
 
-@app.command()
-def ports(
-    port: Annotated[int | None, typer.Option(help="Only this port.")] = None,
-    udp: Annotated[bool, typer.Option("--udp/--no-udp", help="Include UDP sockets.")] = True,
-    url: UrlOption = None,
-    token: TokenOption = None,
-    as_json: JsonOption = False,
-) -> None:
-    """Show what is listening on this machine."""
-    try:
-        rows = listeners(udp=udp)
-    except WardenError as exc:
-        raise _fail(exc) from exc
-    if port is not None:
-        rows = [row for row in rows if row.port == port]
-
-    if as_json:
-        _dump([row.model_dump(mode="json") for row in rows])
-        return
-    if not rows:
-        console.print("nothing is listening" if port is None else f"nothing on port {port}",
-                      style=theme.BONE_DIM)
-        return
-
-    known = _registered_names(url, token)
+def _ports_table(rows: list, known: Owners, *, fleet: bool) -> Table:
     table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
-    for column in ("PORT", "PROTO", "PROCESS", "PID", "USER", "ADDRESS", "WARDEN"):
+    columns = ("PORT", "PROTO", "PROCESS", "PID", "USER", "ADDRESS", "WARDEN")
+    for column in (("NODE", *columns) if fleet else columns):
         table.add_column(column)
     for row in rows:
-        table.add_row(
+        node = row.node if fleet else ""
+        cells = (
             Text(str(row.port), style=theme.GLOW),
             Text(row.protocol, style=theme.BONE_DIM),
             row.process or Text("unknown", style=theme.BONE_DIM),
             Text(str(row.pid) if row.pid else "-", style=theme.BONE_DIM),
             Text(theme.account(row.user), style=theme.BONE_DIM),
             Text(row.host, style=theme.BONE_DIM),
-            Text(known.get((row.host, row.port), "-"), style=theme.MOSS),
+            Text(known.get((node, row.host, row.port), "-"), style=theme.MOSS),
         )
-    console.print(table)
+        table.add_row(*((node, *cells) if fleet else cells))
+    return table
+
+
+def _fleet_ports(
+    url: str | None, token: str | None, *, udp: bool
+) -> tuple[FleetListeners, Owners]:
+    """Every socket the fleet has bound, and which of them warden handed out."""
+    with _client(url, token) as client:
+        found = client.fleet_listeners(udp=udp)
+        known = {
+            (s.node, s.host, s.port): s.name for s in client.fleet_services().services
+        }
+    return found, known
+
+
+@app.command()
+def ports(
+    port: Annotated[int | None, typer.Option(help="Only this port.")] = None,
+    udp: Annotated[bool, typer.Option("--udp/--no-udp", help="Include UDP sockets.")] = True,
+    every: Annotated[
+        bool, typer.Option("--all", help="Ask every warden in the fleet, not just this machine.")
+    ] = False,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Show what is listening on this machine.
+
+    Without `--all` this reads the machine directly and needs no warden running
+    anywhere. With it, the sockets come from every warden in the fleet instead.
+    """
+    fleet = None
+    try:
+        if every:
+            fleet, known = _fleet_ports(url, token, udp=udp)
+            rows: list = list(fleet.listeners)
+        else:
+            rows = list(listeners(udp=udp))
+            known = _registered_names(url, token)
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    if port is not None:
+        rows = [row for row in rows if row.port == port]
+
+    if as_json:
+        _dump(
+            fleet.model_dump(mode="json")
+            if fleet
+            else [row.model_dump(mode="json") for row in rows]
+        )
+        return
+    if not rows:
+        console.print("nothing is listening" if port is None else f"nothing on port {port}",
+                      style=theme.BONE_DIM)
+    else:
+        console.print(_ports_table(rows, known, fleet=bool(fleet)))
 
     unnamed = sum(1 for row in rows if row.process is None)
     if unnamed:
@@ -338,6 +410,8 @@ def ports(
             "run warden as administrator to see them",
             style=theme.SHRIEKER,
         )
+    for missing in fleet.unreachable if fleet else []:
+        errors.print(f"{missing.node} ({missing.url}) {missing.reason}", style=theme.SHRIEKER)
 
 
 @app.command()
@@ -379,14 +453,51 @@ def kill(
 
 
 @app.command()
-def release(name: str, url: UrlOption = None, token: TokenOption = None) -> None:
+def release(
+    name: str, node: NodeOption = None, url: UrlOption = None, token: TokenOption = None
+) -> None:
     """Give a port back to the pool."""
     with _client(url, token) as client:
         try:
-            client.release(name)
+            client.release(name, node=node)
         except WardenError as exc:
             raise _fail(exc) from exc
-    console.print(f"released {name}")
+    console.print(f"released {name}" if node is None else f"released {node}/{name}")
+
+
+@app.command()
+def heartbeat(
+    name: str,
+    ttl: Annotated[
+        int | None, typer.Option(help="Keep it for this many seconds from now.")
+    ] = None,
+    pid: Annotated[int | None, typer.Option(help="Process id of the service.")] = None,
+    node: NodeOption = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Push a lease out again before it runs out.
+
+    Without a ttl it renews the lease the service registered with, so a
+    heartbeat can never turn a lease into a permanent registration by accident.
+    """
+    with _client(url, token) as client:
+        try:
+            service = client.heartbeat(name, ttl=ttl, pid=pid, node=node)
+        except WardenError as exc:
+            raise _fail(exc) from exc
+    if as_json:
+        _dump(service.model_dump(mode="json"))
+    elif service.expires_at:
+        # How long is left, not a wall clock: the registry keeps UTC and the
+        # person reading this is somewhere else.
+        console.print(
+            f"{service.name} holds {service.port} for another "
+            f"{theme.until(service.expires_at)}"
+        )
+    else:
+        console.print(f"{service.name} holds {service.port} with no lease to renew")
 
 
 @app.command()
@@ -497,11 +608,65 @@ def nodes(
     console.print(table)
 
 
+def _free(status: PoolStatus) -> Text:
+    """What is left, coloured by how little that is.
+
+    The point of the fleet view is spotting the machine about to run out, and a
+    column of identical numbers hides exactly that.
+    """
+    capacity = status.allocated + status.available
+    if status.available <= 0:
+        style = theme.EMBER
+    elif capacity and status.available * 10 <= capacity:
+        style = theme.SHRIEKER
+    else:
+        style = theme.MOSS
+    return Text(str(status.available), style=style)
+
+
+def _show_fleet_pool(fleet: FleetPool, *, as_json: bool) -> None:
+    if as_json:
+        _dump(fleet.model_dump(mode="json"))
+    else:
+        table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+        for column in ("NODE", "POOL", "HELD", "FREE", "RESERVED"):
+            table.add_column(column)
+        for status in fleet.pools:
+            table.add_row(
+                status.node,
+                Text(f"{status.start}-{status.end}", style=theme.GLOW),
+                str(status.allocated),
+                _free(status),
+                Text(str(len(status.reserved)), style=theme.BONE_DIM),
+            )
+        console.print(table)
+        console.print()
+        console.print(
+            f"{theme.plural(len(fleet.pools), 'warden')}  "
+            f"{fleet.allocated} allocated  {fleet.available} free  "
+            f"of {fleet.capacity}",
+            style=theme.BONE_DIM,
+        )
+
+    for missing in fleet.unreachable:
+        errors.print(f"{missing.node} ({missing.url}) {missing.reason}", style=theme.SHRIEKER)
+
+
 @app.command()
-def pool(url: UrlOption = None, token: TokenOption = None, as_json: JsonOption = False) -> None:
+def pool(
+    every: Annotated[
+        bool, typer.Option("--all", help="Ask every warden in the fleet, not just this one.")
+    ] = False,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
     """Show how much of the pool is in use."""
     with _client(url, token) as client:
         try:
+            if every:
+                _show_fleet_pool(client.fleet_pool(), as_json=as_json)
+                return
             status = client.pool()
         except WardenError as exc:
             raise _fail(exc) from exc
