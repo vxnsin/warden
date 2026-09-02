@@ -1,8 +1,10 @@
 from collections.abc import Iterator
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from warden import aggregate
 from warden.api import create_app
 from warden.config import Settings
 
@@ -222,7 +224,13 @@ def test_either_token_may_read(settings: Settings):
     # A hub fanning out to its nodes carries the cluster token; a person carries
     # theirs. Both are only reading.
     with guarded(settings) as client:
-        for path in ("/v1/services", "/v1/pool", "/v1/nodes", "/v1/fleet/services"):
+        for path in (
+            "/v1/services",
+            "/v1/pool",
+            "/v1/nodes",
+            "/v1/fleet/services",
+            "/v1/fleet/pool",
+        ):
             assert client.get(path).status_code == 401, path
             assert client.get(path, headers=HUMAN).status_code == 200, path
             assert client.get(path, headers=CLUSTER).status_code == 200, path
@@ -251,6 +259,34 @@ def test_a_node_that_cannot_be_reached_is_named_in_the_fleet_view(client: TestCl
     assert [u["node"] for u in body["unreachable"]] == ["build-01"]
 
 
+def test_the_fleet_pool_includes_the_hubs_own(client: TestClient):
+    client.post("/v1/services", json={"name": "api", "kind": "backend"})
+    body = client.get("/v1/fleet/pool").json()
+    assert [(p["node"], p["allocated"]) for p in body["pools"]] == [("hub", 1)]
+    assert body["allocated"] == 1
+    assert body["capacity"] == 5
+
+
+def test_a_node_that_cannot_be_reached_is_named_in_the_fleet_pool(client: TestClient):
+    client.post("/v1/nodes", json={**NODE, "url": "http://192.0.2.1:7010"})
+    body = client.get("/v1/fleet/pool").json()
+    assert [u["node"] for u in body["unreachable"]] == ["build-01"]
+    # The hub still answers for itself; one dead node is not a dead listing.
+    assert [p["node"] for p in body["pools"]] == ["hub"]
+
+
+def test_the_fleet_ports_include_this_machines_own(client: TestClient):
+    body = client.get("/v1/fleet/listeners").json()
+    assert {item["node"] for item in body["listeners"]} <= {"hub"}
+    assert body["unreachable"] == []
+
+
+def test_stopping_a_process_on_this_warden_still_needs_it_switched_on(client: TestClient):
+    response = client.delete("/v1/fleet/listeners/hub/99")
+    assert response.status_code == 403
+    assert "WARDEN_ALLOW_KILL" in response.json()["detail"]
+
+
 def test_a_qualified_lookup_on_this_warden_itself(client: TestClient):
     client.post("/v1/services", json={"name": "api", "kind": "backend"})
     response = client.get("/v1/fleet/services/hub/api")
@@ -260,6 +296,117 @@ def test_a_qualified_lookup_on_this_warden_itself(client: TestClient):
 
 def test_a_qualified_lookup_on_a_node_nobody_knows(client: TestClient):
     assert client.get("/v1/fleet/services/nowhere/api").status_code == 404
+
+
+def test_registering_through_the_hub_on_the_hub_itself(client: TestClient):
+    response = client.post("/v1/fleet/services/hub", json={"name": "api", "kind": "backend"})
+    assert response.status_code == 201
+    assert response.json() == {**response.json(), "node": "hub", "port": 8000}
+
+
+def test_registering_again_through_the_hub_renews(client: TestClient):
+    client.post("/v1/fleet/services/hub", json={"name": "api", "kind": "backend"})
+    response = client.post("/v1/fleet/services/hub", json={"name": "api", "kind": "backend"})
+    assert response.status_code == 200
+
+
+def test_a_heartbeat_through_the_hub_on_the_hub_itself(client: TestClient):
+    client.post("/v1/services", json={"name": "api", "kind": "backend", "ttl": 60})
+    response = client.post("/v1/fleet/services/hub/api/heartbeat", json={})
+    assert response.status_code == 200
+    assert response.json()["node"] == "hub"
+    assert response.json()["expires_at"] is not None
+
+
+def test_releasing_through_the_hub_on_the_hub_itself(client: TestClient):
+    client.post("/v1/services", json={"name": "api", "kind": "backend"})
+    assert client.delete("/v1/fleet/services/hub/api").status_code == 204
+    assert client.get("/v1/services/api").status_code == 404
+
+
+def test_registering_on_a_node_nobody_knows(client: TestClient):
+    response = client.post("/v1/fleet/services/nowhere", json={"name": "api", "kind": "backend"})
+    assert response.status_code == 404
+    assert "nowhere" in response.json()["detail"]
+
+
+def test_a_node_that_cannot_be_reached_says_which_node(client: TestClient):
+    client.post("/v1/nodes", json={**NODE, "url": "http://192.0.2.1:7010"})
+    response = client.delete("/v1/fleet/services/build-01/api")
+    assert response.status_code == 404
+    assert "build-01" in response.json()["detail"]
+
+
+def answering(handler, seen: list) -> object:
+    """Stand in for the node the hub relays to, and record what it was asked.
+
+    What the recorded authorization then does on the wire is `relaying`'s own
+    business, and tested where that lives.
+    """
+
+    def relaying(authorization: str | None, timeout: float = aggregate.TIMEOUT):
+        def respond(request: httpx.Request) -> httpx.Response:
+            seen.append((str(request.url), authorization))
+            return handler(request)
+
+        return httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+    return relaying
+
+
+def test_a_refusal_from_a_node_reaches_the_caller_unchanged(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    client.post("/v1/nodes", json=NODE)
+    seen: list = []
+    monkeypatch.setattr(
+        aggregate,
+        "relaying",
+        answering(
+            lambda request: httpx.Response(409, json={"detail": "port 3000 is held by 'crm'"}),
+            seen,
+        ),
+    )
+    response = client.post(
+        "/v1/fleet/services/build-01",
+        json={"name": "api", "kind": "backend", "require_port": 3000},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "port 3000 is held by 'crm'"
+    assert seen[0][0] == "http://build-01:7010/v1/services"
+
+
+def test_the_hub_hands_on_the_callers_token_and_not_its_own(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+):
+    seen: list = []
+    monkeypatch.setattr(
+        aggregate,
+        "relaying",
+        answering(lambda request: httpx.Response(204), seen),
+    )
+    with guarded(settings) as client:
+        client.post("/v1/nodes", json=NODE, headers=CLUSTER)
+        assert client.delete(
+            "/v1/fleet/services/build-01/api", headers=HUMAN
+        ).status_code == 204
+    assert seen[0][1] == HUMAN["Authorization"]
+
+
+def test_forwarding_a_registration_takes_a_persons_token_not_the_cluster_one(
+    settings: Settings,
+):
+    # Otherwise the hub would become the one door the cluster token can write
+    # through, which is exactly what it is not for.
+    with guarded(settings) as client:
+        body = {"name": "api", "kind": "backend"}
+        assert client.post("/v1/fleet/services/hub", json=body).status_code == 401
+        assert client.post(
+            "/v1/fleet/services/hub", json=body, headers=CLUSTER
+        ).status_code == 401
+        assert client.post(
+            "/v1/fleet/services/hub", json=body, headers=HUMAN
+        ).status_code == 201
 
 
 def test_the_update_status_is_readable(client: TestClient):

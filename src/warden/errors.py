@@ -42,3 +42,15 @@ class UnknownNodeError(WardenError):
 
 class UpdateFailedError(WardenError):
     status_code = 500
+
+
+class RelayedError(WardenError):
+    """An answer from another warden, handed on exactly as it came.
+
+    The node owns the decision, so it owns the wording too. Rewriting its 409
+    into the hub's own words would hide which machine refused, and why.
+    """
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code

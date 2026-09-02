@@ -6,6 +6,7 @@ amethyst and shrieker amber for telling one kind of service from another.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from itertools import groupby
 
@@ -80,6 +81,32 @@ def age(moment: datetime) -> str:
     if seconds < 86_400:
         return f"{seconds // 3600}h ago"
     return f"{seconds // 86_400}d ago"
+
+
+def until(moment: datetime) -> str:
+    """How long from now, in the largest unit that still says something."""
+    seconds = int((moment - datetime.now(UTC)).total_seconds())
+    if seconds <= 0:
+        return "expired"
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{math.ceil(seconds / 60)}m"
+    if seconds < 86_400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86_400}d"
+
+
+def plural(count: int, thing: str) -> str:
+    """`1 warden`, `2 wardens` - said the way a person would say it."""
+    return f"{count} {thing}" if count == 1 else f"{count} {thing}s"
+
+
+def listed(names: list[str]) -> str:
+    """`a`, `a and b`, `a, b and c` - a list a person would read out."""
+    if len(names) < 2:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def account(user: str | None) -> str:
