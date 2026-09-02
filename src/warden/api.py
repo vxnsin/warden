@@ -67,7 +67,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pool = PortPool(settings.pool_start, settings.pool_end, settings.reserved)
         app.state.settings = settings
         app.state.manager = Registry(store, pool, probe=settings.probe)
-        app.state.fleet = Fleet(store, ttl=settings.node_ttl)
+        app.state.fleet = Fleet(
+            store, ttl=settings.node_ttl, require_https=settings.require_https
+        )
         # Reports in the background: a hub that is down must not hold up a node
         # that is perfectly able to hand out ports on its own.
         reporter = UpstreamReporter(settings)
@@ -321,7 +323,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return FleetRegistration(node=node, **registration.model_dump())
         async with aggregate.relaying(authorization) as http:
             registration, created = await aggregate.register_on(
-                http, fleet.nodes(), node, request.model_dump(mode="json")
+                http,
+                fleet.nodes(),
+                node,
+                request.model_dump(mode="json"),
+                require_https=settings.require_https,
             )
         response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return registration
@@ -343,7 +349,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return FleetRegistration(node=node, **manager.heartbeat(name, request).model_dump())
         async with aggregate.relaying(authorization) as http:
             return await aggregate.heartbeat_on(
-                http, fleet.nodes(), node, name, request.model_dump(mode="json")
+                http,
+                fleet.nodes(),
+                node,
+                name,
+                request.model_dump(mode="json"),
+                require_https=settings.require_https,
             )
 
     @fleet_writes.delete(
@@ -363,7 +374,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             manager.release(name)
             return
         async with aggregate.relaying(authorization) as http:
-            await aggregate.release_on(http, fleet.nodes(), node, name)
+            await aggregate.release_on(
+                http, fleet.nodes(), node, name, require_https=settings.require_https
+            )
 
     @fleet_writes.delete(
         "/listeners/{node}/{pid}",
@@ -388,7 +401,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             stop_listener(pid, force=force)
             return
         async with aggregate.relaying(authorization) as http:
-            await aggregate.stop_on(http, fleet.nodes(), node, pid, force=force)
+            await aggregate.stop_on(
+                http,
+                fleet.nodes(),
+                node,
+                pid,
+                force=force,
+                require_https=settings.require_https,
+            )
 
     @reads.get("/update", summary="Whether a newer warden exists")
     def update_status(request: Request) -> UpdateStatus:

@@ -112,6 +112,11 @@ def default_node() -> str:
     return slugify(socket.gethostname())
 
 
+def insecure(url: str) -> bool:
+    """Whether a token sent to this address would cross the network in the clear."""
+    return urlparse(url).scheme != "https"
+
+
 def reachable_from_elsewhere(url: str) -> bool:
     """Whether another machine could actually open this address."""
     host = urlparse(url).hostname or ""
@@ -155,6 +160,7 @@ class Settings(BaseSettings):
     upstream: str | None = None
     cluster_token: str | None = None
     node_ttl: int = Field(default=90, ge=10, le=86_400)
+    require_https: bool = False
 
     @classmethod
     def settings_customise_sources(

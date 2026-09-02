@@ -6,7 +6,12 @@ import httpx
 import pytest
 
 from warden import aggregate
-from warden.errors import RelayedError, UnknownNodeError, UnknownServiceError
+from warden.errors import (
+    NotPermittedError,
+    RelayedError,
+    UnknownNodeError,
+    UnknownServiceError,
+)
 from warden.models import Listener, Node, PoolStatus, Registration
 
 
@@ -497,3 +502,50 @@ def test_a_node_with_killing_switched_off_refuses_in_its_own_words():
         asyncio.run(run(lambda http: aggregate.stop_on(http, [node("build-01")], "build-01", 99)))
     assert caught.value.status_code == 403
     assert "switched off" in caught.value.message
+
+
+def relay_to(nodes, transport, *, require_https=False):
+    async def main():
+        async with httpx.AsyncClient(transport=transport) as http:
+            return await aggregate.release_on(
+                http, nodes, "build-01", "api", require_https=require_https
+            )
+
+    return asyncio.run(main())
+
+
+def secure_node(name: str = "build-01") -> Node:
+    return node(name).model_copy(update={"url": f"https://{name}:7010"})
+
+
+def test_a_token_is_not_sent_to_a_plain_http_node_when_https_is_required():
+    transport = httpx.MockTransport(lambda request: httpx.Response(204))
+    with pytest.raises(NotPermittedError, match="in the clear"):
+        relay_to([node("build-01")], transport, require_https=True)
+
+
+def test_https_nodes_are_relayed_to_as_usual():
+    transport = httpx.MockTransport(lambda request: httpx.Response(204))
+    assert relay_to([secure_node()], transport, require_https=True) is None
+
+
+def test_plain_http_still_works_when_nothing_asked_otherwise():
+    transport = httpx.MockTransport(lambda request: httpx.Response(204))
+    assert relay_to([node("build-01")], transport) is None
+
+
+def test_plain_http_is_named_in_the_log_once_per_node(caplog):
+    aggregate._warned.clear()
+    transport = httpx.MockTransport(lambda request: httpx.Response(204))
+    with caplog.at_level("WARNING", logger="warden.fleet"):
+        relay_to([node("build-01")], transport)
+        relay_to([node("build-01")], transport)
+    assert sum("plain HTTP" in record.message for record in caplog.records) == 1
+
+
+def test_an_https_node_is_never_warned_about(caplog):
+    aggregate._warned.clear()
+    transport = httpx.MockTransport(lambda request: httpx.Response(204))
+    with caplog.at_level("WARNING", logger="warden.fleet"):
+        relay_to([secure_node()], transport)
+    assert not caplog.records

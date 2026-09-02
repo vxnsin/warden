@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from collections.abc import Sequence
 from typing import TypeVar
@@ -10,7 +11,8 @@ from typing import TypeVar
 import httpx
 
 from warden.client import detail_of
-from warden.errors import RelayedError, UnknownNodeError, UnknownServiceError
+from warden.config import insecure
+from warden.errors import NotPermittedError, RelayedError, UnknownNodeError, UnknownServiceError
 from warden.models import (
     Duplicate,
     FleetListener,
@@ -29,6 +31,11 @@ from warden.models import (
 )
 
 Answer = TypeVar("Answer")
+
+logger = logging.getLogger("warden.fleet")
+
+# Named once per node, not once per request.
+_warned: set[str] = set()
 
 # Long enough for a busy machine on a local network, short enough that a rack of
 # dead nodes does not make the listing feel broken. They are asked in parallel,
@@ -66,10 +73,24 @@ def relaying(authorization: str | None, timeout: float = TIMEOUT) -> httpx.Async
     return httpx.AsyncClient(timeout=timeout, headers=headers)
 
 
-def _named(nodes: list[Node], name: str) -> Node:
+def _named(nodes: list[Node], name: str, *, require_https: bool = False) -> Node:
+    """The node by that name, if a token may be sent to where it says it is."""
     node = next((candidate for candidate in nodes if candidate.name == name), None)
     if node is None:
         raise UnknownNodeError(f"no node registered as {name!r}")
+    if insecure(node.url):
+        if require_https:
+            raise NotPermittedError(
+                f"{name} is at {node.url} and this warden requires HTTPS; "
+                "a token sent there would cross the network in the clear"
+            )
+        if name not in _warned:
+            _warned.add(name)
+            logger.warning(
+                "sending a token to %s over plain HTTP; set WARDEN_REQUIRE_HTTPS "
+                "once the fleet can speak it",
+                node.url,
+            )
     return node
 
 
@@ -276,6 +297,7 @@ async def _relay(
     node_name: str,
     method: str,
     path: str,
+    require_https: bool = False,
     **kwargs: object,
 ) -> httpx.Response:
     """Put one request to one named node, and hand back what it answered.
@@ -284,7 +306,7 @@ async def _relay(
     the port - so the hub adds nothing to the question and nothing to the
     answer. What comes back refused comes back refused in the node's own words.
     """
-    node = _named(nodes, node_name)
+    node = _named(nodes, node_name, require_https=require_https)
     try:
         response = await http.request(method, f"{node.url}{path}", **kwargs)
         response.raise_for_status()
@@ -296,10 +318,18 @@ async def _relay(
 
 
 async def register_on(
-    http: httpx.AsyncClient, nodes: list[Node], node_name: str, payload: dict[str, object]
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    node_name: str,
+    payload: dict[str, object],
+    *,
+    require_https: bool = False,
 ) -> tuple[FleetRegistration, bool]:
     """Ask one node for a port. Returns the registration and whether it is new."""
-    response = await _relay(http, nodes, node_name, "POST", "/v1/services", json=payload)
+    response = await _relay(
+        http, nodes, node_name, "POST", "/v1/services",
+        require_https=require_https, json=payload,
+    )
     created = response.status_code == httpx.codes.CREATED
     return FleetRegistration(node=node_name, **response.json()), created
 
@@ -310,23 +340,40 @@ async def heartbeat_on(
     node_name: str,
     service: str,
     payload: dict[str, object],
+    *,
+    require_https: bool = False,
 ) -> FleetRegistration:
     """Extend a lease held by one node."""
     response = await _relay(
-        http, nodes, node_name, "POST", f"/v1/services/{service}/heartbeat", json=payload
+        http, nodes, node_name, "POST", f"/v1/services/{service}/heartbeat",
+        require_https=require_https, json=payload,
     )
     return FleetRegistration(node=node_name, **response.json())
 
 
 async def release_on(
-    http: httpx.AsyncClient, nodes: list[Node], node_name: str, service: str
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    node_name: str,
+    service: str,
+    *,
+    require_https: bool = False,
 ) -> None:
     """Give a port back on the node that handed it out."""
-    await _relay(http, nodes, node_name, "DELETE", f"/v1/services/{service}")
+    await _relay(
+        http, nodes, node_name, "DELETE", f"/v1/services/{service}",
+        require_https=require_https,
+    )
 
 
 async def stop_on(
-    http: httpx.AsyncClient, nodes: list[Node], node_name: str, pid: int, *, force: bool = False
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    node_name: str,
+    pid: int,
+    *,
+    force: bool = False,
+    require_https: bool = False,
 ) -> None:
     """Ask one node to stop a process of its own.
 
@@ -335,5 +382,6 @@ async def stop_on(
     which is the whole reason this goes by node rather than by number.
     """
     await _relay(
-        http, nodes, node_name, "DELETE", f"/v1/listeners/{pid}", params={"force": force}
+        http, nodes, node_name, "DELETE", f"/v1/listeners/{pid}",
+        require_https=require_https, params={"force": force},
     )

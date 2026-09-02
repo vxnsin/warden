@@ -447,3 +447,19 @@ def test_a_fleet_update_reports_every_warden_including_this_one(client: TestClie
     # The hub says why it refused itself, rather than pretending it worked.
     here = next(row for row in body["results"] if row["node"] == "hub")
     assert "WARDEN_ALLOW_REMOTE_UPDATE" in here["detail"]
+
+
+def test_a_node_cannot_be_re_announced_somewhere_else(client: TestClient):
+    client.post("/v1/nodes", json=NODE)
+    response = client.post("/v1/nodes", json={**NODE, "url": "http://elsewhere:7010"})
+    assert response.status_code == 409
+    assert "--forget build-01" in response.json()["detail"]
+    assert client.get("/v1/nodes").json()[0]["url"] == NODE["url"]
+
+
+def test_requiring_https_keeps_a_plain_http_node_out(settings: Settings):
+    strict = settings.model_copy(update={"require_https": True})
+    with TestClient(create_app(strict)) as client:
+        assert client.post("/v1/nodes", json=NODE).status_code == 403
+        secure = {**NODE, "url": "https://build-01:7010"}
+        assert client.post("/v1/nodes", json=secure).status_code == 201

@@ -323,6 +323,14 @@ server that is not answering is a fact worth seeing, and
 run on the same machine; a node pointing at a hub elsewhere while advertising
 `127.0.0.1` is refused at startup rather than left to fail silently later.
 
+**A name is pinned to the address it first announced.** A second announcement
+claiming a different address is refused, because anyone holding the cluster token
+could otherwise point an existing node at a machine of their own and collect the
+next token the hub forwards. A genuine move is
+`warden nodes --forget build-01` first. Set `WARDEN_REQUIRE_HTTPS` once the fleet
+can speak it; until then warden names each plain-HTTP node in its log the first
+time a token goes there.
+
 The hub can answer for the whole fleet at once, and a node that does not answer
 is named rather than left out:
 
@@ -451,6 +459,7 @@ setting. Each is also an environment variable with a `WARDEN_` prefix:
 | `WARDEN_ADVERTISE` | from host and port | Address the hub should use to reach it |
 | `WARDEN_CLUSTER_TOKEN` | empty | Shared secret between wardens |
 | `WARDEN_NODE_TTL` | `90` | Seconds a node's entry stays fresh |
+| `WARDEN_REQUIRE_HTTPS` | `false` | Refuse to register or send a token to a plain HTTP node |
 
 The registry binds to loopback and has no authentication by default. Set a token
 before binding it to anything else.
