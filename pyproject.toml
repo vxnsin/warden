@@ -1,5 +1,7 @@
+# `warden` is taken on PyPI by an unrelated project, so the distribution is
+# named after what it does. The command it installs stays `warden`.
 [project]
-name = "warden"
+name = "warden-ports"
 version = "0.1.0"
 description = "Nothing binds a port without asking. A registry that hands out local ports."
 readme = "README.md"
