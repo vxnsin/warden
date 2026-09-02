@@ -2,6 +2,12 @@
 
 **Nothing binds a port without asking.**
 
+[Wiki](https://github.com/vxnsin/warden/wiki) ·
+[Installation](https://github.com/vxnsin/warden/wiki/Installation) ·
+[One machine](https://github.com/vxnsin/warden/wiki/One-machine) ·
+[Cluster](https://github.com/vxnsin/warden/wiki/Cluster) ·
+[Troubleshooting](https://github.com/vxnsin/warden/wiki/Troubleshooting)
+
 One place that decides which local port a service runs on. Services register
 under a name, say what they are, and get a port back. The same name keeps the
 same port across restarts, so a backend never wakes up on the port its frontend
@@ -51,24 +57,27 @@ starts and talks to the wrong neighbour.
 ## Install
 
 ```sh
+uv tool install warden-ports
+```
+
+That gives you `warden` in cmd, PowerShell and any POSIX shell, from any
+directory. Or run it once without installing:
+
+```sh
+uvx --from warden-ports warden ports
+```
+
+The distribution is called `warden-ports` because `warden` on PyPI belongs to
+something else. The command it installs is `warden` either way.
+
+From a checkout, to work on it:
+
+```sh
 git clone https://github.com/vxnsin/warden
 cd warden
 uv sync
 uv run warden
 ```
-
-To get `warden` as a command of its own, without the `uv run` in front:
-
-```sh
-uv tool install .
-```
-
-That works in cmd, PowerShell and any POSIX shell, from any directory.
-
-The distribution is called `warden-ports` because `warden` on PyPI belongs to
-something else; the command it installs is `warden` either way. It is not
-published yet, so installing by name does not work — see
-[#1](https://github.com/vxnsin/warden/issues/1).
 
 ## Quick start
 
@@ -378,8 +387,9 @@ Wardens authenticate to each other with `WARDEN_CLUSTER_TOKEN`, separate from th
 `WARDEN_TOKEN` a person uses. The cluster token opens announcing and reading; it
 opens nothing that changes state.
 
-[docs/fleet.md](https://github.com/vxnsin/warden/blob/main/docs/fleet.md) goes through the whole thing: what the hub keeps,
-what survives what, and why it is built this way.
+The [Cluster](https://github.com/vxnsin/warden/wiki/Cluster) page goes through
+the whole thing: what the hub keeps, what survives what, and why it is built
+this way.
 
 ## Updates
 
@@ -401,8 +411,8 @@ be worth every machine it can reach. Both `WARDEN_ALLOW_REMOTE_UPDATE` and a
 configured command are off by default, and a warden without them refuses and
 says so.
 
-[docs/updates.md](https://github.com/vxnsin/warden/blob/main/docs/updates.md) has the rest, including why the restart is
-your command's job.
+The [Updates](https://github.com/vxnsin/warden/wiki/Updates) page has the rest,
+including why the restart is your command's job.
 
 ## Configuration
 
