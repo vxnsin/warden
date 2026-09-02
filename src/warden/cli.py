@@ -527,6 +527,10 @@ def ports(
         raise _fail(exc) from exc
     if port is not None:
         rows = [row for row in rows if row.port == port]
+        # The dump is built from the rows the table would show, or --port would
+        # quietly mean nothing the moment --json was asked for as well.
+        if fleet:
+            fleet = fleet.model_copy(update={"listeners": rows})
 
     if as_json:
         _dump(
