@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -234,6 +235,20 @@ def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
             console.print("  It arrived.", style=theme.MOSS)
 
 
+def _has_a_screen() -> bool:
+    """Whether a full-screen program can be drawn where this is running.
+
+    A terminal on its own is not enough. A machine with TERM unset or set to
+    dumb - a bare cron job, a serial console, some build runners - cannot draw
+    one, and finding that out from a traceback helps nobody.
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    if sys.platform == "win32":
+        return True
+    return os.environ.get("TERM", "") not in {"", "dumb"}
+
+
 def _setup_questions() -> dict[str, object]:
     """The same questions, one at a time, for anything without a terminal."""
     _greet()
@@ -293,7 +308,7 @@ def setup(
     answers in, a job on a build machine - gets them one at a time, and
     `--plain` asks for that on purpose.
     """
-    if plain or not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if plain or not _has_a_screen():
         answers = _setup_questions()
     else:
         # Imported here so the command line stays quick for everything that
@@ -595,6 +610,13 @@ def tui(
     one warden at a time. A large fleet is worth a longer `--interval`, since
     every refresh asks every node.
     """
+    if not _has_a_screen():
+        raise _fail(
+            WardenError(
+                "this terminal cannot draw a screen; `warden ls` and `warden ports` "
+                "read the same things in plain text"
+            )
+        )
     from warden.tui import run
 
     run(url, token=token, interval=interval, fleet=every)

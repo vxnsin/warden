@@ -422,6 +422,11 @@ handed out and what is actually listening:
 | `d` | Release the service, or stop the process |
 | `q` | Quit |
 
+On a short terminal the mascot gives up its rows to the table, and a narrow one
+scrolls the table sideways rather than dropping columns. Over ssh at 80 by 24
+both views are readable, and the line under the table always says which keys do
+what.
+
 The dashboard reads both tables from the warden it is pointed at, so the ports
 it lists are the ones on *that* machine. Stopping a process from here goes
 through the API and needs `WARDEN_ALLOW_KILL` (see below); `warden kill` on the
@@ -738,6 +743,25 @@ the webhook shape, tick boxes for which events are worth posting, and `ctrl+t`
 to post a test event before saving anything. Questions that nothing has earned
 stay hidden - there is no token to fill in until the warden is reachable from
 somewhere else, and no shape to pick until events are going anywhere at all.
+
+| Key | Action |
+| --- | --- |
+| `tab` `shift+tab` | Move between fields |
+| `space` | Toggle a switch or a tick box |
+| `enter` | Open a menu, or pick from it |
+| `ctrl+t` | Post a test event to the address on screen |
+| `ctrl+s` | Save |
+| `ctrl+q` | Leave without writing anything |
+
+It fits an 80 by 24 terminal, which is the size an ssh session usually opens
+at. Under 84 columns the labels move above the fields they name and the mascot
+gives up its rows; nothing is ever cut off, and the two lines at the bottom say
+which keys do what rather than assuming you know.
+
+On a machine that has a terminal but cannot draw on one — `TERM` unset or set
+to `dumb`, which is what a cron job or a serial console gets — `warden setup`
+falls back to the questions instead of failing, and `warden tui` says so and
+points at `warden ls`.
 
 Without a terminal - a script piping answers in, a job on a build machine - the
 same questions come one at a time instead, and `warden setup --plain` asks for

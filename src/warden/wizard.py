@@ -27,6 +27,13 @@ from warden.tui import BANNER_MIN_HEIGHT, PALETTE
 
 WEBHOOK_KEYS = ("webhook", "webhook_format", "webhook_events", "webhook_secret")
 
+# A label of 34 columns beside a field of 44 needs this much before either has
+# to be cut. Narrower than that, the label goes above the field instead.
+NARROW = 84
+
+# What the footer cannot say, because these belong to whatever has focus.
+HINTS = "tab moves  -  space toggles  -  enter opens a menu"
+
 COLOURS = {
     **PALETTE,
     "moss": theme.MOSS,
@@ -100,18 +107,20 @@ Screen {
 }
 
 Input {
-    width: 44;
+    width: 1fr;
+    max-width: 44;
     background: $sculk;
     border: tall $vein;
 }
 Input:focus { border: tall $glow_dim; }
 
-Select { width: 44; }
+Select { width: 1fr; max-width: 44; }
 Select > SelectCurrent { background: $sculk; border: tall $vein; }
 Select:focus > SelectCurrent { border: tall $glow_dim; }
 
 SelectionList {
-    width: 44;
+    width: 1fr;
+    max-width: 44;
     height: auto;
     background: $sculk;
     border: tall $vein;
@@ -123,13 +132,24 @@ Switch:focus { border: tall $glow_dim; }
 Switch > .switch--slider { color: $dim; background: $sculk; }
 Switch.-on > .switch--slider { color: $glow; }
 
-#status {
+#hints {
     height: auto;
     padding-top: 1;
     color: $dim;
 }
+
+#status { height: auto; }
 #status.-bad { color: $ember; }
 #status.-good { color: $moss; }
+
+/* Under NARROW columns the label no longer fits beside the field it names, so
+   it goes above it and everything gives up the margins it was enjoying. */
+Screen.-narrow #shell { padding: 0 1; }
+Screen.-narrow #form { padding: 0 1 1 1; }
+Screen.-narrow .field { layout: vertical; }
+Screen.-narrow .name { width: 1fr; padding-top: 0; }
+Screen.-narrow .hint { padding-left: 0; }
+Screen.-narrow #hints { padding-top: 0; }
 """
 
 
@@ -292,14 +312,29 @@ class Setup(App[dict[str, object] | None]):
                     Switch(current.allow_kill, id="allow-kill"),
                     "Off by default. It is a much bigger thing to hand out than a port.",
                 )
+            yield Static(HINTS, id="hints")
             yield Static("", id="status")
         yield Footer()
 
     def on_mount(self) -> None:
-        # The mascot is worth its lines only when there are lines to spare.
-        self.query_one("#banner").display = self.size.height >= BANNER_MIN_HEIGHT
+        self._fit()
         self._reveal()
+        self.query_one("#status").display = False
         self.query_one("#pool", Input).focus()
+
+    def on_resize(self) -> None:
+        self._fit()
+
+    def _fit(self) -> None:
+        """Give up decoration before giving up any of the questions.
+
+        An 80 by 24 terminal over ssh is a real place this gets run, and it has
+        no rows to spend on a mascot.
+        """
+        self.screen.set_class(self.size.width < NARROW, "-narrow")
+        room = self.size.height >= BANNER_MIN_HEIGHT and self.size.width >= NARROW
+        self.query_one("#banner").display = room
+        self.query_one("#tagline").display = room
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         self._reveal()
@@ -332,6 +367,8 @@ class Setup(App[dict[str, object] | None]):
         status = self.query_one("#status", Static)
         status.set_classes(["-bad"] if bad else ["-good"] if good else [])
         status.update(message)
+        # A row nobody needs is a row a 24-line terminal cannot spare.
+        status.display = bool(message)
 
     def answers(self) -> dict[str, object]:
         """Everything on screen, as the settings file would have it."""

@@ -261,3 +261,59 @@ def test_the_events_already_chosen_start_ticked_and_the_others_do_not():
         scenario,
         settings(webhook="https://chat.example/hook", webhook_events={"registered", "expired"}),
     )
+
+
+def test_a_narrow_terminal_puts_the_label_above_the_field_it_names():
+    async def scenario(app: Setup, pilot) -> None:
+        assert app.screen.has_class("-narrow")
+        assert not app.query_one("#banner").display
+        assert not app.query_one("#tagline").display
+
+    asking(scenario, size=(80, 24))
+
+
+def test_a_terminal_with_room_keeps_the_mascot():
+    async def scenario(app: Setup, pilot) -> None:
+        assert not app.screen.has_class("-narrow")
+        assert app.query_one("#banner").display
+
+    asking(scenario, size=(120, 44))
+
+
+def test_nothing_is_cut_off_on_an_eighty_column_terminal():
+    """80 by 24 over ssh is a real place this gets run."""
+
+    async def scenario(app: Setup, pilot) -> None:
+        edge = app.query_one("#form").content_region.right
+        for widget in app.query(Input):
+            if widget.display:
+                assert widget.region.right <= edge, widget.id
+
+    asking(scenario, settings(webhook="https://chat.example/hook"), size=(80, 24))
+
+
+def test_the_controls_are_on_screen_rather_than_assumed():
+    async def scenario(app: Setup, pilot) -> None:
+        hints = text_of(app, "#hints")
+        assert "tab" in hints and "space" in hints and "enter" in hints
+        assert not app.query_one("#status").display
+
+    asking(scenario, size=(80, 24))
+
+
+def test_a_message_takes_its_row_only_while_there_is_one():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#pool", Input).value = "nonsense"
+        await pilot.press("ctrl+s")
+        assert app.query_one("#status").display
+        await pilot.press("ctrl+q")
+
+    asking(scenario, size=(80, 24))
+
+
+def test_it_stays_in_one_piece_on_a_very_small_terminal():
+    async def scenario(app: Setup, pilot) -> None:
+        assert app.query_one("#hints").display
+        assert app.query_one("#form").size.height > 0
+
+    asking(scenario, size=(60, 16))
