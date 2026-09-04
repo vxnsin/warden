@@ -46,9 +46,13 @@ def test_a_port_with_nothing_listening_has_no_holder():
     # Held open but never listened on, so nothing else can take the number
     # while the assertion runs. Releasing it first would leave a gap the
     # operating system is free to hand the port out in.
+    #
+    # udp=False on purpose: tcp and udp are separate port spaces, so holding
+    # this number for tcp says nothing about whether something is sitting on
+    # the same number over udp - which is exactly what a Windows runner did.
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        assert holder_of(sock.getsockname()[1]) is None
+        assert holder_of(sock.getsockname()[1], udp=False) is None
 
 
 @pytest.mark.sockets
