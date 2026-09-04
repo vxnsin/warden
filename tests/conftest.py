@@ -8,6 +8,8 @@ import pytest
 
 from warden.allocator import PortPool
 from warden.config import Settings
+from warden.errors import NotPermittedError
+from warden.listeners import listeners
 from warden.service import Registry
 from warden.store import Store
 
@@ -44,3 +46,32 @@ def settings(tmp_path: Path) -> Settings:
         probe=False,
         update_check=False,
     )
+
+
+def _sockets_are_listable() -> bool:
+    """Whether this machine will name the sockets that are open on it.
+
+    macOS refuses to enumerate another process's sockets without root, and says
+    so through warden's own error. The tests that need a real listing skip
+    there rather than reporting the machine as broken.
+    """
+    try:
+        listeners()
+    except NotPermittedError:
+        return False
+    return True
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "sockets: needs this machine to list the sockets open on it"
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if _sockets_are_listable():
+        return
+    refused = pytest.mark.skip(reason="this system will not list sockets without root")
+    for item in items:
+        if "sockets" in item.keywords:
+            item.add_marker(refused)

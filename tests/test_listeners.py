@@ -27,10 +27,12 @@ def _unused_pid() -> int:
     return candidate
 
 
+@pytest.mark.sockets
 def test_a_socket_we_opened_ourselves_shows_up(bound_port: int):
     assert bound_port in {row.port for row in listeners()}
 
 
+@pytest.mark.sockets
 def test_our_own_socket_is_traced_back_to_this_process(bound_port: int):
     holder = holder_of(bound_port)
     assert holder is not None
@@ -39,6 +41,7 @@ def test_our_own_socket_is_traced_back_to_this_process(bound_port: int):
     assert holder.address == f"127.0.0.1:{bound_port}"
 
 
+@pytest.mark.sockets
 def test_a_port_with_nothing_listening_has_no_holder():
     # Held open but never listened on, so nothing else can take the number
     # while the assertion runs. Releasing it first would leave a gap the
@@ -48,15 +51,18 @@ def test_a_port_with_nothing_listening_has_no_holder():
         assert holder_of(sock.getsockname()[1]) is None
 
 
+@pytest.mark.sockets
 def test_udp_sockets_can_be_left_out():
     assert all(row.protocol.startswith("tcp") for row in listeners(udp=False))
 
 
+@pytest.mark.sockets
 def test_the_listing_is_ordered_by_port():
     ports = [row.port for row in listeners()]
     assert ports == sorted(ports)
 
 
+@pytest.mark.sockets
 def test_every_row_names_its_protocol():
     assert {row.protocol for row in listeners()} <= {"tcp", "tcp6", "udp", "udp6"}
 

@@ -47,7 +47,13 @@ WARDEN column names the service whenever the port did come from the registry.
 column saying which machine each socket is on.
 
 Sockets owned by another user appear without a process name; run warden as
-administrator on Windows, or with `sudo` on Linux and macOS, to see those too.
+administrator on Windows, or with `sudo` on Linux, to see those too.
+
+**macOS is stricter than either.** It will not let an unprivileged process
+enumerate sockets at all, so `warden ports`, the dashboard's ports view,
+`warden ls --holders` and `warden reap` need `sudo` there and say so plainly
+when they do not have it. Nothing else is affected: handing out ports, the
+fleet, events, `warden apply` and `warden export` never read the socket table.
 
 ## Why
 
