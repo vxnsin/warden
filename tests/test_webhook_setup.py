@@ -3,8 +3,7 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from warden import cli
-from warden.cli import app
+from warden.cli import app, shared
 from warden.core import config
 from warden.models import WebhookStatus
 
@@ -27,7 +26,7 @@ def posted(monkeypatch: pytest.MonkeyPatch) -> list:
         sent.append(settings)
         return None
 
-    monkeypatch.setattr(cli, "send_one", remember)
+    monkeypatch.setattr(shared, "send_one", remember)
     return sent
 
 
@@ -104,7 +103,7 @@ def test_the_test_post_uses_what_was_just_answered(posted: list):
 def test_a_test_post_that_does_not_arrive_still_writes_the_setting_down(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(cli, "send_one", lambda settings, event=None: "connection refused")
+    monkeypatch.setattr(shared, "send_one", lambda settings, event=None: "connection refused")
     result = runner.invoke(
         app,
         ["setup"],
@@ -136,7 +135,7 @@ class FakeClient:
 
 
 def serving(monkeypatch: pytest.MonkeyPatch, status: WebhookStatus) -> None:
-    monkeypatch.setattr(cli, "_client", lambda url, token: FakeClient(status))
+    monkeypatch.setattr(shared, "_client", lambda url, token: FakeClient(status))
 
 
 def test_the_command_says_where_events_go(monkeypatch: pytest.MonkeyPatch):
@@ -186,7 +185,7 @@ def test_testing_without_anywhere_to_post_says_so(monkeypatch: pytest.MonkeyPatc
 
 def test_testing_posts_one_event_and_says_where(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/services/T0/B0/xxxx")
-    monkeypatch.setattr(cli, "send_one", lambda settings, event=None: None)
+    monkeypatch.setattr(shared, "send_one", lambda settings, event=None: None)
     result = runner.invoke(app, ["webhook", "--test"])
     assert result.exit_code == 0
     assert "posted to https://chat.example/..." in result.stdout
@@ -195,7 +194,7 @@ def test_testing_posts_one_event_and_says_where(monkeypatch: pytest.MonkeyPatch)
 
 def test_a_test_that_fails_is_worth_a_non_zero_exit(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/hook")
-    monkeypatch.setattr(cli, "send_one", lambda settings, event=None: "timed out")
+    monkeypatch.setattr(shared, "send_one", lambda settings, event=None: "timed out")
     result = runner.invoke(app, ["webhook", "--test"])
     assert result.exit_code == 1
     assert "it did not arrive: timed out" in result.stderr
@@ -203,7 +202,7 @@ def test_a_test_that_fails_is_worth_a_non_zero_exit(monkeypatch: pytest.MonkeyPa
 
 def test_a_test_can_be_read_by_a_machine(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/hook")
-    monkeypatch.setattr(cli, "send_one", lambda settings, event=None: "timed out")
+    monkeypatch.setattr(shared, "send_one", lambda settings, event=None: "timed out")
     result = runner.invoke(app, ["webhook", "--test", "--json"])
     assert json.loads(result.stdout) == {
         "target": "https://chat.example/...",
@@ -229,42 +228,42 @@ class Pipe:
 
 
 def at_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli.sys, "stdin", Terminal())
-    monkeypatch.setattr(cli.sys, "stdout", Terminal())
+    monkeypatch.setattr(shared.sys, "stdin", Terminal())
+    monkeypatch.setattr(shared.sys, "stdout", Terminal())
 
 
 def test_a_terminal_on_linux_can_draw_a_screen(monkeypatch: pytest.MonkeyPatch):
     at_a_terminal(monkeypatch)
-    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(shared.sys, "platform", "linux")
     monkeypatch.setenv("TERM", "xterm-256color")
-    assert cli._has_a_screen()
+    assert shared._has_a_screen()
 
 
 def test_a_terminal_that_cannot_draw_one_is_not_asked_to(monkeypatch: pytest.MonkeyPatch):
     """A cron job on a Linux box has a terminal and no way to paint on it."""
     at_a_terminal(monkeypatch)
-    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(shared.sys, "platform", "linux")
     for term in ("dumb", ""):
         monkeypatch.setenv("TERM", term)
-        assert not cli._has_a_screen()
+        assert not shared._has_a_screen()
 
 
 def test_windows_says_nothing_about_term(monkeypatch: pytest.MonkeyPatch):
     at_a_terminal(monkeypatch)
-    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(shared.sys, "platform", "win32")
     monkeypatch.delenv("TERM", raising=False)
-    assert cli._has_a_screen()
+    assert shared._has_a_screen()
 
 
 def test_answers_piped_in_never_open_a_screen(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cli.sys, "stdin", Pipe())
-    monkeypatch.setattr(cli.sys, "stdout", Terminal())
+    monkeypatch.setattr(shared.sys, "stdin", Pipe())
+    monkeypatch.setattr(shared.sys, "stdout", Terminal())
     monkeypatch.setenv("TERM", "xterm-256color")
-    assert not cli._has_a_screen()
+    assert not shared._has_a_screen()
 
 
 def test_the_dashboard_says_so_rather_than_falling_over(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cli, "_has_a_screen", lambda: False)
+    monkeypatch.setattr(shared, "_has_a_screen", lambda: False)
     result = runner.invoke(app, ["tui"])
     assert result.exit_code == 1
     assert "cannot draw a screen" in result.stderr

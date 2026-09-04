@@ -5,8 +5,8 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from warden import __version__, cli
-from warden.cli import app
+from warden import __version__
+from warden.cli import app, shared
 from warden.core import health
 from warden.core.config import Settings
 from warden.core.health import FAIL, NOTE, OK, WARN, Check, examine, exit_code
@@ -212,7 +212,7 @@ def test_a_listing_that_cannot_be_read_fails_rather_than_being_ignored(settings:
 
 
 def test_the_command_prints_a_line_per_check(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cli, "_client", lambda url, token: FakeClient())
+    monkeypatch.setattr(shared, "_client", lambda url, token: FakeClient())
     result = runner_cli.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "answering at" in result.output
@@ -220,13 +220,13 @@ def test_the_command_prints_a_line_per_check(monkeypatch: pytest.MonkeyPatch):
 
 def test_the_command_exits_one_when_something_failed(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        cli, "_client", lambda url, token: FakeClient(health=WardenError("nothing there"))
+        shared, "_client", lambda url, token: FakeClient(health=WardenError("nothing there"))
     )
     assert runner_cli.invoke(app, ["doctor"]).exit_code == 1
 
 
 def test_the_report_can_be_read_by_a_machine(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cli, "_client", lambda url, token: FakeClient())
+    monkeypatch.setattr(shared, "_client", lambda url, token: FakeClient())
     payload = json.loads(runner_cli.invoke(app, ["doctor", "--json"]).output)
     assert {check["level"] for check in payload} <= {OK, NOTE, WARN, FAIL}
 

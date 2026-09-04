@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from typer.testing import CliRunner
 
-from warden import __version__, cli
-from warden.cli import app
+from warden import __version__
+from warden.cli import app, shared
 from warden.models import (
     FleetRegistration,
     FleetServices,
@@ -158,7 +158,7 @@ class FakeClient:
 @pytest.fixture
 def only(monkeypatch: pytest.MonkeyPatch) -> FakeClient:
     fake = FakeClient([service("shop-api", 8000, project="shop")])
-    monkeypatch.setattr(cli, "_client", lambda url, token: fake)
+    monkeypatch.setattr(shared, "_client", lambda url, token: fake)
     return fake
 
 
@@ -179,7 +179,7 @@ def test_a_machine_that_could_not_be_asked_is_said_out_loud(monkeypatch: pytest.
         unreachable=[Unreachable(node="db-03", url="http://db-03:7010", reason="timed out")],
     )
     fake = FakeClient([], fleet)
-    monkeypatch.setattr(cli, "_client", lambda url, token: fake)
+    monkeypatch.setattr(shared, "_client", lambda url, token: fake)
     result = runner_cli.invoke(app, ["export", "caddy", "--all"], catch_exceptions=False)
     assert "reverse_proxy 10.0.0.7:8000" in result.stdout
     assert "db-03" not in result.stdout
