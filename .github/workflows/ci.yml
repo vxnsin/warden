@@ -22,6 +22,24 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
 
+  firewall:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Its own network namespace and NET_ADMIN: a `policy drop` in here cannot
+      # reach the runner that has to report the result.
+      - name: Apply a real ruleset to a real machine
+        run: |
+          docker run --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
+            -v "$PWD:/warden" -w /warden python:3.13-slim \
+            bash -euo pipefail -c '
+              apt-get -qq update
+              apt-get -qq install -y --no-install-recommends nftables > /dev/null
+              pip install -q .
+              ./scripts/firewall-smoke.sh
+            '
+
   image:
     runs-on: ubuntu-latest
     steps:

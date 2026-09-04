@@ -65,6 +65,22 @@ CREATE TABLE IF NOT EXISTS rules (
 CREATE INDEX IF NOT EXISTS rules_origin ON rules (origin);
 CREATE INDEX IF NOT EXISTS rules_service ON rules (service);
 
+CREATE TABLE IF NOT EXISTS snapshots (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    at      TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    body    TEXT NOT NULL,
+    reason  TEXT
+);
+
+-- One row or none: either a rollback is armed or it is not.
+CREATE TABLE IF NOT EXISTS pending (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    snapshot INTEGER NOT NULL,
+    deadline TEXT NOT NULL,
+    reason   TEXT
+);
+
 CREATE TABLE IF NOT EXISTS nodes (
     name       TEXT PRIMARY KEY,
     url        TEXT NOT NULL,
@@ -564,3 +580,66 @@ class RuleStore:
             )
             self._store._db.commit()
         return cursor.rowcount
+
+
+class Snapshots:
+    """What the firewall looked like before, and whether it is going back.
+
+    Kept in the database rather than a file so the watchdog, the command that
+    armed it and the one that confirms it are all looking at the same thing,
+    whichever of them is still alive.
+    """
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    def take(self, backend: str, body: str, reason: str | None = None) -> int:
+        with self._store._lock:
+            cursor = self._store._db.execute(
+                "INSERT INTO snapshots (at, backend, body, reason) VALUES (?, ?, ?, ?)",
+                (_isoformat(datetime.now(UTC)), backend, body, reason),
+            )
+            self._store._db.commit()
+        return int(cursor.lastrowid or 0)
+
+    def body(self, snapshot: int) -> str | None:
+        with self._store._lock:
+            row = self._store._db.execute(
+                "SELECT body FROM snapshots WHERE id = ?", (snapshot,)
+            ).fetchone()
+        return row["body"] if row else None
+
+    def latest(self) -> sqlite3.Row | None:
+        with self._store._lock:
+            return self._store._db.execute(
+                "SELECT * FROM snapshots ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+
+    def arm(self, snapshot: int, deadline: datetime, reason: str | None = None) -> None:
+        """Say that the firewall goes back at this moment unless told otherwise."""
+        with self._store._lock:
+            self._store._db.execute(
+                """
+                INSERT INTO pending (id, snapshot, deadline, reason) VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    snapshot = excluded.snapshot,
+                    deadline = excluded.deadline,
+                    reason = excluded.reason
+                """,
+                (snapshot, _isoformat(deadline), reason),
+            )
+            self._store._db.commit()
+
+    def armed(self) -> tuple[int, datetime, str | None] | None:
+        with self._store._lock:
+            row = self._store._db.execute("SELECT * FROM pending WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        return row["snapshot"], datetime.fromisoformat(row["deadline"]), row["reason"]
+
+    def disarm(self) -> bool:
+        """Called by confirming, and by the rollback once it has happened."""
+        with self._store._lock:
+            cursor = self._store._db.execute("DELETE FROM pending WHERE id = 1")
+            self._store._db.commit()
+        return cursor.rowcount > 0

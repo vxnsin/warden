@@ -8,8 +8,10 @@ into over the network something other than a gamble.
 from __future__ import annotations
 
 import shutil
+import subprocess
 from datetime import UTC, datetime
 
+from warden.errors import FirewallError, NotPermittedError
 from warden.firewall.backends.base import Backend
 from warden.firewall.model import Action, Direction, Policy, Protocol, Rule
 
@@ -18,6 +20,9 @@ TABLE = "warden"
 VERDICTS = {Action.ALLOW: "accept", Action.DENY: "drop", Action.REJECT: "reject"}
 
 HEADER = "# Written by warden. Regenerate it; do not edit it."
+
+# A firewall change that hangs is worse than one that fails.
+TIMEOUT = 20.0
 
 
 def _ports(rule: Rule) -> str:
@@ -101,3 +106,48 @@ class Nftables(Backend):
         lines += [f"\t\t{line(rule)}" for rule in outgoing]
         lines += ["\t}", "}", ""]
         return "\n".join(lines)
+    def apply(self, policy: Policy) -> None:
+        self.load(self.render(policy))
+
+    def snapshot(self) -> str:
+        """Everything currently loaded, in a form `nft -f` will take back."""
+        return self._nft(["list", "ruleset"], doing="reading the ruleset")
+
+    def restore(self, snapshot: str) -> None:
+        """Put back exactly what was there, including an empty ruleset."""
+        self.load("flush ruleset\n" + snapshot)
+
+    def load(self, ruleset: str) -> None:
+        """One file, one transaction. Either all of it applies or none does.
+
+        This is the whole reason nftables came first. Applying rule by rule
+        would leave a machine half-governed, and on a remote host that half is
+        where the ssh session used to be.
+        """
+        self._nft(["-f", "-"], stdin=ruleset, doing="applying the ruleset")
+
+    def _nft(self, arguments: list[str], *, stdin: str | None = None, doing: str) -> str:
+        if not self.available():
+            raise FirewallError("no nft on this machine, so there is nothing to talk to")
+        try:
+            finished = subprocess.run(
+                ["nft", *arguments],
+                input=stdin,
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+                check=False,
+            )
+        except OSError as exc:
+            raise FirewallError(f"could not run nft - {exc}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise FirewallError(f"nft took longer than {TIMEOUT:g}s {doing}") from exc
+
+        if finished.returncode != 0:
+            said = (finished.stderr or finished.stdout).strip() or f"exit {finished.returncode}"
+            if "Operation not permitted" in said or "must be root" in said:
+                raise NotPermittedError(
+                    f"nft refused: {said.splitlines()[0]} - a firewall needs root"
+                )
+            raise FirewallError(f"nft failed {doing}: {said.splitlines()[0]}")
+        return finished.stdout
