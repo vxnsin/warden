@@ -5,11 +5,11 @@ import pytest
 from typer.testing import CliRunner
 
 from warden.cli import app
+from warden.core.store import RuleStore, Store
 from warden.errors import WardenError
 from warden.firewall import catalogue
 from warden.firewall.backends.nftables import Nftables, line
 from warden.firewall.model import Action, Direction, Origin, Policy, Protocol, Rule
-from warden.store import RuleStore, Store
 
 runner_cli = CliRunner()
 
@@ -225,7 +225,20 @@ def test_an_empty_machine_says_so_rather_than_printing_a_bare_table(alone: Away)
 
 def test_export_prints_the_ruleset_and_changes_nothing(alone: Away):
     runner_cli.invoke(app, ["firewall", "allow", "ssh", "--from", "10.0.0.0/8"])
-    result = runner_cli.invoke(app, ["firewall", "export"])
+    result = runner_cli.invoke(app, ["firewall", "export", "--for", "nftables"])
     assert result.exit_code == 0
     assert "flush ruleset" in result.stdout
     assert "tcp dport 22 accept" in result.stdout
+
+
+def test_a_ruleset_can_be_written_for_a_firewall_this_machine_does_not_have(alone: Away):
+    """Reading it on a laptop before it reaches the machine it is for."""
+    runner_cli.invoke(app, ["firewall", "allow", "ssh"])
+    written = runner_cli.invoke(app, ["firewall", "export", "--for", "nftables"])
+    assert "table inet warden" in written.stdout
+
+
+def test_a_firewall_nobody_has_heard_of_is_refused_by_name(alone: Away):
+    result = runner_cli.invoke(app, ["firewall", "export", "--for", "iptables"])
+    assert result.exit_code == 1
+    assert "no firewall backend called 'iptables'" in result.stderr

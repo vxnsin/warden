@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from warden.config import DEFAULT_URL
+from warden.core.config import DEFAULT_URL
 from warden.errors import (
     NotPermittedError,
     PoolExhaustedError,

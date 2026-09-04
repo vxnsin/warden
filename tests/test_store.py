@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from warden.core.store import Store
 from warden.models import Node, Registration
-from warden.store import Store
 
 
 def registration(name: str, port: int, **kwargs) -> Registration:

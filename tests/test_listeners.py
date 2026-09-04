@@ -8,7 +8,7 @@ import psutil
 import pytest
 
 from warden.errors import ProtectedProcessError, UnknownProcessError
-from warden.listeners import SYSTEM_PIDS, holder_of, listeners, stop
+from warden.ports.listeners import SYSTEM_PIDS, holder_of, listeners, stop
 
 
 @pytest.fixture

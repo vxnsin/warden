@@ -19,13 +19,15 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-from warden import __version__, aggregate, metrics, updates
-from warden.allocator import PortPool
-from warden.config import Settings
+from warden import __version__
+from warden.core import metrics, updates
+from warden.core.config import Settings
+from warden.core.events import EventBus
+from warden.core.store import Store
 from warden.errors import NotPermittedError, WardenError
-from warden.events import EventBus
-from warden.fleet import Fleet
-from warden.listeners import listeners, stop
+from warden.fleet import aggregate
+from warden.fleet.nodes import Fleet
+from warden.fleet.upstream import UpstreamReporter
 from warden.models import (
     ErrorResponse,
     Event,
@@ -47,9 +49,9 @@ from warden.models import (
     UpdateStatus,
     WebhookStatus,
 )
-from warden.service import Registry
-from warden.store import Store
-from warden.upstream import UpstreamReporter
+from warden.ports.allocator import PortPool
+from warden.ports.listeners import listeners, stop
+from warden.ports.service import Registry
 
 DESCRIPTION = """
 A single place that decides which local port a service runs on.

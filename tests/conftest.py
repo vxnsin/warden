@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from warden.allocator import PortPool
-from warden.config import Settings
+from warden.core.config import Settings
+from warden.core.store import Store
 from warden.errors import NotPermittedError
-from warden.listeners import listeners
-from warden.service import Registry
-from warden.store import Store
+from warden.ports.allocator import PortPool
+from warden.ports.listeners import listeners
+from warden.ports.service import Registry
 
 
 @pytest.fixture(autouse=True)

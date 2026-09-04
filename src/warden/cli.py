@@ -16,27 +16,15 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from warden import (
-    __version__,
-    autostart,
-    config,
-    export,
-    health,
-    manifest,
-    runner,
-    store,
-    theme,
-    updates,
-    webhooks,
-)
+from warden import __version__, theme
 from warden.client import WardenClient
-from warden.config import Settings
+from warden.core import autostart, config, health, store, updates, webhooks
+from warden.core.config import Settings
+from warden.core.events import redacted, send_one
 from warden.errors import WardenError
-from warden.events import redacted, send_one
 from warden.firewall import catalogue, guard
 from warden.firewall import model as firewall
-from warden.firewall.backends import nftables
-from warden.listeners import GONE, holder_of, listeners, stop
+from warden.firewall.backends import base
 from warden.models import (
     Event,
     FleetListeners,
@@ -47,6 +35,8 @@ from warden.models import (
     Registration,
     UpdateStatus,
 )
+from warden.ports import export, manifest, runner
+from warden.ports.listeners import GONE, holder_of, listeners, stop
 
 app = typer.Typer(
     add_completion=True,
@@ -903,14 +893,26 @@ def firewall_delete(
 
 
 @firewall_app.command("export")
-def firewall_export(as_json: JsonOption = False) -> None:
-    """Show the policy in the words of this machine's firewall.
+def firewall_export(
+    shape: Annotated[
+        str | None, typer.Option("--for", help="Which firewall to write for.")
+    ] = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Show the policy in the words of a firewall.
 
-    It prints and stops. Nothing on this machine changes.
+    It prints and stops - nothing changes anywhere. `--for` writes for a
+    firewall this machine does not have, which is how a ruleset gets read on a
+    laptop before it reaches the machine it is meant for.
     """
     rules = _rules().list()
     policy = firewall.Policy(rules=rules)
-    backend = nftables.Nftables()
+    try:
+        backend = base.backend_for(shape) if shape else _backend()
+    except WardenError as exc:
+        raise _fail(
+            WardenError(f"{exc.message} - name one with --for" if not shape else exc.message)
+        ) from exc
     if as_json:
         _dump(policy.model_dump(mode="json"))
         return
@@ -922,8 +924,9 @@ def firewall_export(as_json: JsonOption = False) -> None:
         )
 
 
-def _backend() -> nftables.Nftables:
-    return nftables.Nftables()
+def _backend() -> base.Backend:
+    """Whichever one this machine uses, or the one the settings name."""
+    return base.backend_for(Settings().firewall_backend)
 
 
 def _snapshots() -> store.Snapshots:
@@ -954,7 +957,10 @@ def firewall_apply(
     settings = Settings()
     seconds = settings.firewall_rollback if rollback is None else rollback
     policy = firewall.Policy(rules=_rules().list())
-    backend = _backend()
+    try:
+        backend = _backend()
+    except WardenError as exc:
+        raise _fail(exc) from exc
 
     if not yes:
         console.print(backend.render(policy), end="", highlight=False)
@@ -1012,7 +1018,10 @@ def firewall_restore(
 @firewall_app.command("status")
 def firewall_status(as_json: JsonOption = False) -> None:
     """Whether a rollback is waiting, and what this machine can do."""
-    backend = _backend()
+    try:
+        backend = _backend()
+    except WardenError as exc:
+        raise _fail(exc) from exc
     waiting = guard.armed(_snapshots())
     if as_json:
         _dump(

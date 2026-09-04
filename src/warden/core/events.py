@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from warden import webhooks
-from warden.config import Settings
+from warden.core import webhooks
+from warden.core.config import Settings
 from warden.models import Event, WebhookStatus
 
 logger = logging.getLogger("warden.events")

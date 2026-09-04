@@ -5,12 +5,12 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from warden import __version__, cli, health
+from warden import __version__, cli
 from warden.cli import app
-from warden.config import Settings
+from warden.core import health
+from warden.core.config import Settings
+from warden.core.health import FAIL, NOTE, OK, WARN, Check, examine, exit_code
 from warden.errors import NotPermittedError, UnknownServiceError, WardenError
-from warden.health import FAIL, NOTE, OK, WARN, Check, examine, exit_code
-from warden.listeners import GONE, RUNNING
 from warden.models import (
     Health,
     Node,
@@ -19,6 +19,7 @@ from warden.models import (
     UpdateStatus,
     WebhookStatus,
 )
+from warden.ports.listeners import GONE, RUNNING
 
 runner_cli = CliRunner()
 

@@ -1,9 +1,9 @@
 import pytest
 from typer.testing import CliRunner
 
-from warden import config
 from warden.cli import app
-from warden.config import Settings
+from warden.core import config
+from warden.core.config import Settings
 
 runner = CliRunner()
 

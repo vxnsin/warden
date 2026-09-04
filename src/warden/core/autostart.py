@@ -16,9 +16,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from warden.allocator import is_bound
-from warden.config import Settings
+from warden.core.config import Settings
 from warden.errors import NotPermittedError, WardenError
+from warden.ports.allocator import is_bound
 
 LABEL = "com.github.vxnsin.warden"
 

@@ -14,7 +14,7 @@ import httpx
 from packaging.version import InvalidVersion, Version
 
 from warden import __version__
-from warden.config import Settings
+from warden.core.config import Settings
 from warden.errors import NotPermittedError, UpdateFailedError
 from warden.models import UpdateStatus
 

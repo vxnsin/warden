@@ -4,8 +4,9 @@ import sys
 import httpx
 import pytest
 
-from warden import __version__, updates
-from warden.config import Settings
+from warden import __version__
+from warden.core import updates
+from warden.core.config import Settings
 from warden.errors import NotPermittedError, UpdateFailedError
 
 

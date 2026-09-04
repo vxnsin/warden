@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from warden import autostart
-from warden.autostart import (
+from warden.cli import app
+from warden.core import autostart
+from warden.core.autostart import (
     INSTALLED,
     MISSING,
     RUNNING,
@@ -17,7 +18,6 @@ from warden.autostart import (
     autostart_for,
     serve_command,
 )
-from warden.cli import app
 from warden.errors import NotPermittedError, WardenError
 
 runner_cli = CliRunner()

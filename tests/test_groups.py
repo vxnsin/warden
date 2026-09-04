@@ -5,14 +5,14 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from warden import cli
-from warden.allocator import PortPool
 from warden.api import create_app
 from warden.cli import app
-from warden.config import Settings
+from warden.core.config import Settings
+from warden.core.store import Store
 from warden.errors import PoolExhaustedError
 from warden.models import GroupRequest, Registration, RegistrationRequest
-from warden.service import Registry
-from warden.store import Store
+from warden.ports.allocator import PortPool
+from warden.ports.service import Registry
 
 runner_cli = CliRunner()
 

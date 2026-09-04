@@ -15,9 +15,9 @@ from textual.widgets import Button, DataTable, Label, Static
 from warden import theme
 from warden.client import WardenClient
 from warden.errors import WardenError
-from warden.listeners import listeners
-from warden.listeners import stop as stop_here
 from warden.models import FleetPool, Listener, PoolStatus, Registration, Unreachable
+from warden.ports.listeners import listeners
+from warden.ports.listeners import stop as stop_here
 
 SERVICES = "services"
 PORTS = "ports"

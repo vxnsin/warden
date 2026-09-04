@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from warden import manifest
-from warden.manifest import ManifestError
+from warden.ports import manifest
+from warden.ports.manifest import ManifestError
 
 GOOD = """
 [project]

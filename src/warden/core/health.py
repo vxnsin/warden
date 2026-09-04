@@ -12,10 +12,10 @@ import httpx
 
 from warden import __version__, theme
 from warden.client import WardenClient
-from warden.config import Settings, config_file, insecure
+from warden.core.config import Settings, config_file, insecure
 from warden.errors import NotPermittedError, WardenError
-from warden.listeners import GONE
 from warden.models import Health
+from warden.ports.listeners import GONE
 
 OK = "ok"
 NOTE = "note"

@@ -5,8 +5,8 @@ import httpx
 import pytest
 
 from warden import __version__
-from warden.config import Settings
-from warden.upstream import UpstreamReporter
+from warden.core.config import Settings
+from warden.fleet.upstream import UpstreamReporter
 
 
 @pytest.fixture

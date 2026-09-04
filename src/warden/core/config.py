@@ -20,7 +20,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from warden.store import ACTIONS, NOTABLE
+from warden.core.store import ACTIONS, NOTABLE
 
 DEFAULT_URL = "http://127.0.0.1:7010"
 

@@ -9,7 +9,7 @@ from warden import cli
 from warden.api import create_app
 from warden.cli import app
 from warden.client import WardenClient
-from warden.config import Settings
+from warden.core.config import Settings
 
 runner_cli = CliRunner()
 
