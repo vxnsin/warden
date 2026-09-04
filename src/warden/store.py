@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from warden.firewall.model import Rule
 from warden.models import Event, Node, Registration
 
 logger = logging.getLogger("warden.store")
@@ -44,6 +45,25 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_port ON events (port);
 CREATE INDEX IF NOT EXISTS events_name ON events (name);
+
+CREATE TABLE IF NOT EXISTS rules (
+    name        TEXT PRIMARY KEY,
+    direction   TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    protocol    TEXT NOT NULL,
+    ports       TEXT NOT NULL DEFAULT '[]',
+    source      TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    interface   TEXT,
+    origin      TEXT NOT NULL,
+    service     TEXT,
+    expires_at  TEXT,
+    comment     TEXT,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rules_origin ON rules (origin);
+CREATE INDEX IF NOT EXISTS rules_service ON rules (service);
 
 CREATE TABLE IF NOT EXISTS nodes (
     name       TEXT PRIMARY KEY,
@@ -427,3 +447,120 @@ class Store:
                 self._db.commit()
         self._announce()
         return [row["name"] for row in rows]
+
+
+def _row_to_rule(row: sqlite3.Row) -> Rule:
+    return Rule(
+        name=row["name"],
+        direction=row["direction"],
+        action=row["action"],
+        protocol=row["protocol"],
+        ports=set(json.loads(row["ports"])),
+        source=row["source"],
+        destination=row["destination"],
+        interface=row["interface"],
+        origin=row["origin"],
+        service=row["service"],
+        expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
+        comment=row["comment"],
+        enabled=bool(row["enabled"]),
+    )
+
+
+class RuleStore:
+    """The firewall's rules, in the same database and under the same lock.
+
+    Separate class, one connection: two stores over one SQLite file would take
+    turns waiting for each other, and a rule and the registration it borrowed
+    its lease from should be able to change together.
+    """
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    def list(self, *, origin: str | None = None) -> list[Rule]:
+        query = "SELECT * FROM rules"
+        params: list[object] = []
+        if origin:
+            query += " WHERE origin = ?"
+            params.append(origin)
+        query += " ORDER BY created_at, name"
+        with self._store._lock:
+            rows = self._store._db.execute(query, params).fetchall()
+        return [_row_to_rule(row) for row in rows]
+
+    def get(self, name: str) -> Rule | None:
+        with self._store._lock:
+            row = self._store._db.execute(
+                "SELECT * FROM rules WHERE name = ?", (name,)
+            ).fetchone()
+        return _row_to_rule(row) if row else None
+
+    def save(self, rule: Rule) -> None:
+        self.save_many([rule])
+
+    def save_many(self, rules: list[Rule]) -> None:
+        """All of them or none, like everything else that writes here."""
+        now = _isoformat(datetime.now(UTC))
+        with self._store._lock:
+            try:
+                for rule in rules:
+                    self._store._db.execute(
+                        """
+                        INSERT INTO rules
+                            (name, direction, action, protocol, ports, source,
+                             destination, interface, origin, service, expires_at,
+                             comment, enabled, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(name) DO UPDATE SET
+                            direction = excluded.direction,
+                            action = excluded.action,
+                            protocol = excluded.protocol,
+                            ports = excluded.ports,
+                            source = excluded.source,
+                            destination = excluded.destination,
+                            interface = excluded.interface,
+                            origin = excluded.origin,
+                            service = excluded.service,
+                            expires_at = excluded.expires_at,
+                            comment = excluded.comment,
+                            enabled = excluded.enabled
+                        """,
+                        (
+                            rule.name,
+                            rule.direction,
+                            rule.action,
+                            rule.protocol,
+                            json.dumps(sorted(rule.ports)),
+                            rule.source,
+                            rule.destination,
+                            rule.interface,
+                            rule.origin,
+                            rule.service,
+                            _isoformat(rule.expires_at),
+                            rule.comment,
+                            int(rule.enabled),
+                            now,
+                        ),
+                    )
+            except Exception:
+                self._store._db.rollback()
+                raise
+            self._store._db.commit()
+
+    def delete(self, name: str) -> bool:
+        with self._store._lock:
+            cursor = self._store._db.execute("DELETE FROM rules WHERE name = ?", (name,))
+            self._store._db.commit()
+        return cursor.rowcount > 0
+
+    def delete_many(self, names: list[str]) -> int:
+        if not names:
+            return 0
+        marks = ", ".join("?" for _ in names)
+        with self._store._lock:
+            cursor = self._store._db.execute(
+                f"DELETE FROM rules WHERE name IN ({marks})", names
+            )
+            self._store._db.commit()
+        return cursor.rowcount
