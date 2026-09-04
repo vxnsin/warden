@@ -33,7 +33,7 @@ from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
 from warden.events import redacted, send_one
-from warden.firewall import catalogue
+from warden.firewall import catalogue, guard
 from warden.firewall import model as firewall
 from warden.firewall.backends import nftables
 from warden.listeners import GONE, holder_of, listeners, stop
@@ -920,6 +920,125 @@ def firewall_export(as_json: JsonOption = False) -> None:
             f"no {backend.kind} on this machine - this is what it would say",
             style=theme.BONE_DIM,
         )
+
+
+def _backend() -> nftables.Nftables:
+    return nftables.Nftables()
+
+
+def _snapshots() -> store.Snapshots:
+    return store.Snapshots(store.Store(Settings().database))
+
+
+def _waiting_line(waiting: guard.Armed) -> None:
+    console.print(
+        f"rolling back in {waiting.left():.0f}s unless you run `warden firewall confirm`",
+        style=theme.SHRIEKER,
+    )
+
+
+@firewall_app.command("apply")
+def firewall_apply(
+    rollback: Annotated[
+        int | None,
+        typer.Option(help="Seconds to wait for a confirmation. 0 turns it off."),
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask first.")] = False,
+    as_json: JsonOption = False,
+) -> None:
+    """Make the rules true on this machine.
+
+    A snapshot is taken first and a rollback armed, so a rule that locks you
+    out undoes itself rather than needing somebody at the keyboard.
+    """
+    settings = Settings()
+    seconds = settings.firewall_rollback if rollback is None else rollback
+    policy = firewall.Policy(rules=_rules().list())
+    backend = _backend()
+
+    if not yes:
+        console.print(backend.render(policy), end="", highlight=False)
+        if not typer.confirm("Apply this?"):
+            console.print("left alone", style=theme.BONE_DIM)
+            return
+
+    snapshots = _snapshots()
+    try:
+        waiting = guard.apply(backend, snapshots, policy, rollback=seconds)
+    except WardenError as exc:
+        raise _fail(exc) from exc
+
+    if waiting is not None:
+        guard.start_watchdog(str(settings.database), waiting.deadline)
+    if as_json:
+        _dump(
+            {
+                "applied": True,
+                "rollback_at": waiting.deadline.isoformat() if waiting else None,
+            }
+        )
+        return
+    console.print(f"{len(policy.live(datetime.now(UTC)))} rules applied", style=theme.MOSS)
+    if waiting is None:
+        console.print("no rollback armed", style=theme.BONE_DIM)
+    else:
+        _waiting_line(waiting)
+
+
+@firewall_app.command("confirm")
+def firewall_confirm() -> None:
+    """Keep what was applied, and call off the rollback."""
+    try:
+        guard.confirm(_snapshots())
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    console.print("kept", style=theme.MOSS)
+
+
+@firewall_app.command("restore")
+def firewall_restore(
+    snapshot: Annotated[
+        int | None, typer.Argument(help="Which snapshot. The last one by default.")
+    ] = None,
+) -> None:
+    """Put the firewall back the way it was."""
+    try:
+        which = guard.roll_back(_backend(), _snapshots(), snapshot)
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    console.print(f"restored snapshot {which}", style=theme.MOSS)
+
+
+@firewall_app.command("status")
+def firewall_status(as_json: JsonOption = False) -> None:
+    """Whether a rollback is waiting, and what this machine can do."""
+    backend = _backend()
+    waiting = guard.armed(_snapshots())
+    if as_json:
+        _dump(
+            {
+                "backend": backend.kind,
+                "available": backend.available(),
+                "rules": len(_rules().list()),
+                "rollback_at": waiting.deadline.isoformat() if waiting else None,
+            }
+        )
+        return
+    console.print(
+        f"{backend.kind}: " + ("present" if backend.available() else "not on this machine"),
+        style=theme.BONE_DIM,
+    )
+    if waiting is not None:
+        _waiting_line(waiting)
+
+
+@firewall_app.command("_watch", hidden=True)
+def firewall_watch(
+    database: Annotated[str, typer.Option()],
+    until: Annotated[str, typer.Option()],
+) -> None:
+    """Sit out a rollback window. Started detached; never run by hand."""
+    guard.watch(database, datetime.fromisoformat(until))
 
 
 service_app = typer.Typer(help="Start warden with the machine.")

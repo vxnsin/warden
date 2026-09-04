@@ -58,3 +58,9 @@ class RelayedError(WardenError):
 
 class NodeMovedError(WardenError):
     status_code = 409
+
+
+class FirewallError(WardenError):
+    """The machine refused to take a ruleset, or would not say what it holds."""
+
+    status_code = 500

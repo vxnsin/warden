@@ -464,10 +464,12 @@ class Setup(App[dict[str, object] | None]):
         self.exit(None)
 
     def action_page_up(self) -> None:
-        self.query_one("#form", VerticalScroll).scroll_page_up()
+        # Not animated: a form should jump where you sent it, and a glide
+        # makes the position a question of timing.
+        self.query_one("#form", VerticalScroll).scroll_page_up(animate=False)
 
     def action_page_down(self) -> None:
-        self.query_one("#form", VerticalScroll).scroll_page_down()
+        self.query_one("#form", VerticalScroll).scroll_page_down(animate=False)
 
     def action_test(self) -> None:
         if not self._on("webhook-on"):
