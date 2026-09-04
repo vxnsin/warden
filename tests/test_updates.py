@@ -59,11 +59,46 @@ def test_running_the_newest_is_not_reported_as_an_update():
     assert status.latest == __version__
 
 
-def test_a_project_with_no_releases_says_so_plainly():
+def test_a_project_with_nothing_published_says_so_plainly():
     status = check(answering(lambda request: httpx.Response(404, json={})))
     assert status.available is False
     assert status.latest is None
-    assert "no releases yet" in status.reason
+    assert "nothing to update to yet" in status.reason
+
+
+def test_a_project_that_tags_without_releasing_still_counts():
+    """A tag is a version somebody can install, release page or not."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/releases/latest"):
+            return httpx.Response(404, json={})
+        return httpx.Response(200, json=[{"name": "v0.2.0"}, {"name": "v0.1.0"}])
+
+    status = check(answering(handler), repo="vxnsin/warden")
+    assert status.latest == "0.2.0"
+    assert status.url == "https://github.com/vxnsin/warden/releases/tag/v0.2.0"
+
+
+def test_the_highest_tag_wins_whatever_order_they_arrive_in():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/releases/latest"):
+            return httpx.Response(404, json={})
+        return httpx.Response(
+            200, json=[{"name": "v0.9.0"}, {"name": "nightly"}, {"name": "v0.10.0"}]
+        )
+
+    assert check(answering(handler)).latest == "0.10.0"
+
+
+def test_tags_that_are_not_versions_are_not_offered_as_one():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/releases/latest"):
+            return httpx.Response(404, json={})
+        return httpx.Response(200, json=[{"name": "nightly"}, {"name": "latest"}])
+
+    status = check(answering(handler))
+    assert status.latest is None
+    assert "nothing that looks like a version" in status.reason
 
 
 def test_no_network_is_a_reason_not_a_crash():
@@ -95,7 +130,10 @@ def test_the_repository_asked_about_is_the_configured_one():
         return httpx.Response(404, json={})
 
     check(answering(handler), repo="someone/else")
-    assert seen == ["https://api.github.com/repos/someone/else/releases/latest"]
+    assert seen == [
+        "https://api.github.com/repos/someone/else/releases/latest",
+        "https://api.github.com/repos/someone/else/tags",
+    ]
 
 
 def settings(**kwargs) -> Settings:
@@ -165,3 +203,37 @@ def test_the_watcher_has_an_answer_before_it_has_asked():
     watcher = updates.UpdateWatcher(Settings(update_check=False))
     assert watcher.status.current == __version__
     assert watcher.status.available is False
+
+
+def test_the_check_works_with_no_warden_running(monkeypatch: pytest.MonkeyPatch):
+    """Whether a newer warden exists is a question about this installation."""
+    asked = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"tag_name": "v9.0.0", "html_url": "https://x.invalid"})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        updates.httpx,
+        "AsyncClient",
+        lambda **kwargs: real(transport=answering(handler), **kwargs),
+    )
+    status = updates.check_now(settings(update_repo="vxnsin/warden"))
+    assert status.latest == "9.0.0"
+    assert status.available is True
+    assert asked == ["https://api.github.com/repos/vxnsin/warden/releases/latest"]
+
+
+def test_updating_here_needs_a_command_but_not_the_api_switch():
+    """The gate is about a request moving this machine, not a person at it."""
+    with pytest.raises(NotPermittedError, match="no WARDEN_UPDATE_COMMAND"):
+        updates.run_here(settings(allow_remote_update=True))
+
+
+def test_updating_here_runs_the_command_without_allow_remote_update(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(updates, "_run", lambda settings, timeout: "Successfully installed")
+    said = updates.run_here(settings(update_command="echo hello", allow_remote_update=False))
+    assert said == "Successfully installed"

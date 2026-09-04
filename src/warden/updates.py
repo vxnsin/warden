@@ -21,6 +21,8 @@ from warden.models import UpdateStatus
 logger = logging.getLogger("warden.updates")
 
 RELEASES = "https://api.github.com/repos/{repo}/releases/latest"
+TAGS = "https://api.github.com/repos/{repo}/tags"
+TAG_PAGE = "https://github.com/{repo}/releases/tag/{tag}"
 
 # An update is never urgent enough to justify holding a command up.
 TIMEOUT = 5.0
@@ -44,11 +46,9 @@ async def check(http: httpx.AsyncClient, repo: str) -> UpdateStatus:
     try:
         response = await http.get(RELEASES.format(repo=repo))
         if response.status_code == httpx.codes.NOT_FOUND:
-            return UpdateStatus(
-                current=__version__,
-                checked_at=now,
-                reason=f"{repo} has published no releases yet",
-            )
+            # A repository can carry tags and publish no releases. That is
+            # still a version somebody can install, so it still counts.
+            return await _newest_tag(http, repo, now)
         response.raise_for_status()
         body = response.json()
     except httpx.HTTPError as exc:
@@ -66,6 +66,80 @@ async def check(http: httpx.AsyncClient, repo: str) -> UpdateStatus:
         url=body.get("html_url"),
         checked_at=now,
     )
+
+
+async def _newest_tag(http: httpx.AsyncClient, repo: str, now: datetime) -> UpdateStatus:
+    """The highest version tag, for a repository that tags but does not release."""
+    try:
+        response = await http.get(TAGS.format(repo=repo))
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return UpdateStatus(
+                current=__version__,
+                checked_at=now,
+                reason=f"{repo} has published nothing to update to yet",
+            )
+        response.raise_for_status()
+        names = [str(item.get("name") or "") for item in response.json()]
+    except (httpx.HTTPError, ValueError) as exc:
+        return UpdateStatus(current=__version__, checked_at=now, reason=str(exc))
+
+    tagged = sorted(
+        ((version, name) for name in names if (version := _version_of(name))),
+        reverse=True,
+    )
+    if not tagged:
+        return UpdateStatus(
+            current=__version__,
+            checked_at=now,
+            reason=f"{repo} has published nothing that looks like a version",
+        )
+    _, name = tagged[0]
+    return UpdateStatus(
+        current=__version__,
+        latest=name.lstrip("vV"),
+        available=newer(name),
+        url=TAG_PAGE.format(repo=repo, tag=name),
+        checked_at=now,
+    )
+
+
+def _version_of(name: str) -> Version | None:
+    try:
+        return Version(name.lstrip("vV"))
+    except InvalidVersion:
+        return None
+
+
+def check_now(settings: Settings) -> UpdateStatus:
+    """Ask GitHub from here, for when there is no warden to ask instead.
+
+    A serve process keeps the answer warm so a command never waits on GitHub.
+    Without one, waiting five seconds beats not answering at all - and
+    whether a newer warden exists is a question about this installation, not
+    about anything that happens to be running.
+    """
+
+    async def once() -> UpdateStatus:
+        headers = {"Accept": "application/vnd.github+json"}
+        async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers) as http:
+            return await check(http, settings.update_repo)
+
+    return asyncio.run(once())
+
+
+def run_here(settings: Settings, timeout: float = 300.0) -> str:
+    """Update this machine because a person here asked.
+
+    No `allow_remote_update`: that gate is about a *request* being allowed to
+    move this machine. Somebody typing the command on it is already the
+    authority the gate exists to protect.
+    """
+    if not settings.update_command:
+        raise NotPermittedError(
+            "no WARDEN_UPDATE_COMMAND is set, so warden does not know how to "
+            "update itself here - `uv tool upgrade warden-ports` is the usual one"
+        )
+    return _run(settings, timeout)
 
 
 def _arguments(command: str) -> str | list[str]:
@@ -90,13 +164,18 @@ def apply(settings: Settings, timeout: float = 300.0) -> str:
             "this warden has no WARDEN_UPDATE_COMMAND, so it does not know how to update itself"
         )
 
+    return _run(settings, timeout)
+
+
+def _run(settings: Settings, timeout: float) -> str:
+    """Run the configured command and report what it said."""
     logger.info("updating: %s", settings.update_command)
     try:
         finished = subprocess.run(
             # Windows parses a command line itself, and splitting it with POSIX
             # rules first would eat the backslashes out of every path on the
             # machine. No shell either way: the command is run as it is written.
-            _arguments(settings.update_command),
+            _arguments(settings.update_command or ""),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -113,7 +192,6 @@ def apply(settings: Settings, timeout: float = 300.0) -> str:
             f"the update command exited {finished.returncode}: {output[-500:] or 'no output'}"
         )
     return output[-500:] or "done"
-
 
 class UpdateWatcher:
     """Keeps an answer to 'is there a newer warden?' without anyone waiting for it."""

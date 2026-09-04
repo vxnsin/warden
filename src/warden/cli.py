@@ -26,6 +26,7 @@ from warden import (
     runner,
     store,
     theme,
+    updates,
     webhooks,
 )
 from warden.client import WardenClient
@@ -1537,7 +1538,13 @@ def update(
     token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Say whether a newer warden exists, and optionally go and get it."""
+    """Say whether a newer warden exists, and optionally go and get it.
+
+    Whether a newer warden exists is a question about this installation, so it
+    is answered with or without one running. A warden that is up has the answer
+    already; without one, this asks GitHub itself. Only `--fleet` needs a hub.
+    """
+    settings = Settings()
     with _client(url, token) as client:
         try:
             if not (apply or fleet):
@@ -1554,9 +1561,28 @@ def update(
             else:
                 detail = client.update_self()
                 _dump({"detail": detail}) if as_json else console.print(detail)
+            return
         except WardenError as exc:
-            raise _fail(exc) from exc
+            if fleet or not _nobody_home(exc):
+                raise _fail(exc) from exc
 
+    # No warden answered, and the question was never really about one.
+    try:
+        if not apply:
+            _show_update(updates.check_now(settings), as_json=as_json)
+            return
+        if not yes and not typer.confirm("Update this machine?"):
+            console.print("left alone", style=theme.BONE_DIM)
+            return
+        detail = updates.run_here(settings)
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    _dump({"detail": detail}) if as_json else console.print(detail)
+
+
+def _nobody_home(exc: WardenError) -> bool:
+    """Whether this was 'no warden there' rather than a warden saying no."""
+    return "no warden reachable" in exc.message
 
 def _show_update(status: UpdateStatus, *, as_json: bool) -> None:
     if as_json:
