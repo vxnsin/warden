@@ -2,7 +2,7 @@
 # named after what it does. The command it installs stays `warden`.
 [project]
 name = "warden-ports"
-version = "0.1.0"
+version = "0.2.0"
 description = "Nothing binds a port without asking. A registry that hands out local ports."
 readme = "README.md"
 requires-python = ">=3.11"
