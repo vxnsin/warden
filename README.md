@@ -191,13 +191,32 @@ $ warden events
 arrives, so it pipes into anything. `GET /v1/events` is the same stream as
 server-sent events, behind the same token as every other read.
 
-A webhook sends the same events somewhere else:
+A webhook sends the same events somewhere else. `warden setup` asks for one and
+posts a test event, so you find out there and then whether it arrives:
+
+```
+$ warden setup
+Post events to a chat or a service? [y/N]: y
+  Anyone holding this address can post as you, so it belongs here and nowhere else.
+  Address to post to []: https://discord.com/api/webhooks/...
+  Shape it should take (json/discord/slack/teams) [json]: discord
+  Events worth posting (registered, renewed, moved, released, expired) [...]: registered,released
+  Post a test event now? [Y/n]: y
+  It arrived.
+```
+
+The same four settings one at a time, into the same file:
 
 ```sh
 warden settings set webhook https://discord.com/api/webhooks/...
 warden settings set webhook_format discord    # or slack, teams, json
 warden settings set webhook_events registered,released
+warden webhook --test
 ```
+
+`warden webhook` says where events go and how that has been going; `--test`
+posts one made-up event from this machine, which is the quickest way to find
+out whether an address still works.
 
 `discord`, `slack` and `teams` post something the chat window renders as a
 message rather than a wall of JSON. `json` posts the event as it is, which is

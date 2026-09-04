@@ -145,7 +145,7 @@ def test_unsetting_something_that_is_not_there_says_so():
 
 
 def test_setup_writes_the_answers_it_was_given():
-    result = runner.invoke(app, ["setup"], input="4000-4099\n8080\n7011\nn\nn\nn\n")
+    result = runner.invoke(app, ["setup"], input="4000-4099\n8080\n7011\nn\nn\nn\nn\n")
     assert result.exit_code == 0
     stored = config.stored()
     assert (stored["pool_start"], stored["pool_end"]) == (4000, 4099)
@@ -155,12 +155,12 @@ def test_setup_writes_the_answers_it_was_given():
 
 
 def test_setup_pressing_enter_throughout_keeps_the_defaults():
-    result = runner.invoke(app, ["setup"], input="\n\n\n\n\n\n")
+    result = runner.invoke(app, ["setup"], input="\n\n\n\n\n\n\n")
     assert result.exit_code == 0
     assert config.stored()["pool_start"] == 8000
 
 
 def test_setup_keeps_what_it_was_not_asked_about():
     config.write({"update_command": "/usr/local/bin/update-warden.sh"})
-    runner.invoke(app, ["setup"], input="\n\n\n\n\n\n")
+    runner.invoke(app, ["setup"], input="\n\n\n\n\n\n\n")
     assert config.stored()["update_command"] == "/usr/local/bin/update-warden.sh"
