@@ -127,33 +127,68 @@ class EventBus:
                 await self._post(http, await outbox.get())
 
     async def _post(self, http: httpx.AsyncClient, event: Event) -> None:
-        body, headers = webhooks.render(
-            event,
-            node=self.settings.node,
-            shape=self.settings.webhook_format,
-            secret=self.settings.webhook_secret,
+        problem = await deliver(http, self.settings, event)
+        if problem is None:
+            self._delivered += 1
+            self._last_error = None
+            self._last_sent = datetime.now(UTC)
+            return
+        self._failed += 1
+        self._last_error = problem
+        logger.warning(
+            "gave up posting %s for %s after %s tries: %s",
+            event.action,
+            event.name,
+            ATTEMPTS,
+            problem,
         )
-        for attempt in range(ATTEMPTS):
-            try:
-                response = await http.post(
-                    self.settings.webhook or "", content=body, headers=headers
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                if attempt + 1 == ATTEMPTS:
-                    self._failed += 1
-                    self._last_error = str(exc)
-                    logger.warning(
-                        "gave up posting %s for %s after %s tries: %s",
-                        event.action,
-                        event.name,
-                        ATTEMPTS,
-                        exc,
-                    )
-                    return
+
+
+async def deliver(http: httpx.AsyncClient, settings: Settings, event: Event) -> str | None:
+    """Post one event. Returns what went wrong, or None if it arrived."""
+    body, headers = webhooks.render(
+        event,
+        node=settings.node,
+        shape=settings.webhook_format,
+        secret=settings.webhook_secret,
+    )
+    problem = "nowhere to post to"
+    for attempt in range(ATTEMPTS):
+        try:
+            response = await http.post(settings.webhook or "", content=body, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            problem = str(exc)
+            if attempt + 1 < ATTEMPTS:
                 await asyncio.sleep(BACKOFF**attempt)
-            else:
-                self._delivered += 1
-                self._last_error = None
-                self._last_sent = datetime.now(UTC)
-                return
+        else:
+            return None
+    return problem
+
+
+def sample() -> Event:
+    """The event a webhook is tried out with. Unmistakable in a chat window."""
+    return Event(
+        at=datetime.now(UTC),
+        action="registered",
+        name="warden-test",
+        kind="test",
+        project=None,
+        host="127.0.0.1",
+        port=8000,
+        pid=None,
+    )
+
+
+def send_one(settings: Settings, event: Event | None = None) -> str | None:
+    """Post a single event now, and say what went wrong or nothing if it arrived.
+
+    A webhook whose first exercise is the first real event is a webhook nobody
+    finds out is wrong until it matters.
+    """
+
+    async def once() -> str | None:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as http:
+            return await deliver(http, settings, event or sample())
+
+    return asyncio.run(once())

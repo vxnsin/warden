@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, get_type_hints
+from urllib.parse import urlparse
 
 import typer
 from pydantic import TypeAdapter, ValidationError
@@ -23,10 +24,12 @@ from warden import (
     runner,
     store,
     theme,
+    webhooks,
 )
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
+from warden.events import redacted, send_one
 from warden.listeners import GONE, holder_of, listeners, stop
 from warden.models import (
     Event,
@@ -153,6 +156,83 @@ def _shown(field: str, value: object) -> Text:
     return Text(str(value))
 
 
+def _ask_address(question: str, default: str) -> str:
+    """Ask again rather than write down an address nothing can post to."""
+    while True:
+        answer = typer.prompt(question, default=default).strip()
+        if urlparse(answer).scheme in {"http", "https"}:
+            return answer
+        console.print("  That is not somewhere anything can be posted.", style=theme.SHRIEKER)
+
+
+def _ask_one_of(question: str, options: tuple[str, ...], default: str) -> str:
+    while True:
+        answer = typer.prompt(f"{question} ({'/'.join(options)})", default=default)
+        answer = answer.strip().lower()
+        if answer in options:
+            return answer
+        console.print(f"  There is no {answer!r}.", style=theme.SHRIEKER)
+
+
+def _ask_some_of(question: str, options: tuple[str, ...], default: list[str]) -> list[str]:
+    while True:
+        given = typer.prompt(
+            f"{question} ({', '.join(options)})", default=",".join(default)
+        )
+        chosen = sorted({word.strip().lower() for word in given.split(",") if word.strip()})
+        unknown = [word for word in chosen if word not in options]
+        if unknown:
+            console.print(f"  There is no {theme.listed(unknown)}.", style=theme.SHRIEKER)
+        elif not chosen:
+            console.print("  Name at least one, or answer no above.", style=theme.SHRIEKER)
+        else:
+            return chosen
+
+
+def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
+    """Where events go, and whether that address actually answers."""
+    if not typer.confirm("Post events to a chat or a service?", default=bool(current.webhook)):
+        return
+
+    console.print(
+        "  Anyone holding this address can post as you, so it belongs here and nowhere else.",
+        style=theme.BONE_DIM,
+    )
+    answers["webhook"] = _ask_address("  Address to post to", current.webhook or "")
+    shape = _ask_one_of("  Shape it should take", webhooks.FORMATS, current.webhook_format)
+    answers["webhook_format"] = shape
+    answers["webhook_events"] = _ask_some_of(
+        "  Events worth posting", store.ACTIONS, sorted(current.webhook_events)
+    )
+    if shape == webhooks.JSON:
+        console.print(
+            "  A secret signs the body, so the far end can tell the post came from here.",
+            style=theme.BONE_DIM,
+        )
+        answers["webhook_secret"] = typer.prompt(
+            "  Secret to sign it with", default=current.webhook_secret or ""
+        )
+
+    if typer.confirm("  Post a test event now?", default=True):
+        trying = current.model_copy(
+            update={
+                "webhook": answers["webhook"],
+                "webhook_format": shape,
+                "webhook_secret": answers.get("webhook_secret") or None,
+                "webhook_events": set(answers["webhook_events"]),
+            }
+        )
+        problem = send_one(trying)
+        if problem:
+            console.print(f"  It did not arrive: {problem}", style=theme.EMBER)
+            console.print(
+                "  Writing it down anyway. `warden webhook --test` tries again.",
+                style=theme.BONE_DIM,
+            )
+        else:
+            console.print("  It arrived.", style=theme.MOSS)
+
+
 @app.command()
 def setup() -> None:
     """Ask the few questions that matter and write the answers down."""
@@ -191,6 +271,8 @@ def setup() -> None:
         answers["cluster_token"] = typer.prompt(
             "  Shared secret between wardens", default=current.cluster_token or ""
         )
+
+    _ask_about_webhooks(answers, current)
 
     if typer.confirm("Allow stopping processes over the API?", default=current.allow_kill):
         answers["allow_kill"] = True
@@ -930,6 +1012,65 @@ def events(
         except KeyboardInterrupt:
             # Stopping a stream on purpose is not an error worth a traceback.
             pass
+
+
+@app.command()
+def webhook(
+    test: Annotated[
+        bool, typer.Option("--test", help="Post one made-up event from this machine now.")
+    ] = False,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Where events are posted, and whether that is working.
+
+    `--test` posts from here with this machine's settings, which is what
+    `warden setup` has just written down. Without it the answer comes from the
+    warden that is running, which is a different thing and can differ.
+    """
+    if test:
+        here = Settings()
+        if not here.webhook:
+            raise _fail(WardenError("nothing to post to - `warden setup` writes one down"))
+        problem = send_one(here)
+        if as_json:
+            _dump({"target": redacted(here.webhook), "posted": not problem, "error": problem})
+        elif problem:
+            raise _fail(WardenError(f"it did not arrive: {problem}"))
+        else:
+            console.print(f"posted to {redacted(here.webhook)}", style=theme.MOSS)
+        return
+
+    with _client(url, token) as client:
+        try:
+            status = client.webhook()
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+    if as_json:
+        _dump(status.model_dump(mode="json"))
+        return
+    if not status.configured:
+        console.print("this warden posts events nowhere", style=theme.BONE_DIM)
+        return
+
+    table = Table(box=None, pad_edge=False, show_header=False)
+    table.add_column(no_wrap=True, style=theme.BONE_DIM)
+    table.add_column(overflow="fold")
+    table.add_row("address", status.target)
+    table.add_row("shape", status.format)
+    table.add_row("events", theme.listed(status.actions))
+    table.add_row("delivered", str(status.delivered))
+    if status.failed:
+        table.add_row("never arrived", str(status.failed))
+    if status.dropped:
+        table.add_row("dropped", str(status.dropped))
+    if status.last_sent:
+        table.add_row("last sent", theme.age(status.last_sent))
+    if status.last_error:
+        table.add_row("last error", Text(status.last_error, style=theme.EMBER))
+    console.print(table)
 
 
 @app.command()
