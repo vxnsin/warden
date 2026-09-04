@@ -772,12 +772,13 @@ somewhere else, and no shape to pick until events are going anywhere at all.
 | `tab` `shift+tab` | Move between fields |
 | `space` | Toggle a switch or a tick box |
 | `enter` | Open a menu, or pick from it |
+| `pgup` `pgdn` | Scroll the form without leaving the field you are in |
 | `ctrl+t` | Post a test event to the address on screen |
 | `ctrl+s` | Save |
 | `ctrl+q` | Leave without writing anything |
 
-It fits an 80 by 24 terminal, which is the size an ssh session usually opens
-at. Under 84 columns the labels move above the fields they name and the mascot
+The mouse wheel scrolls too, where the terminal passes it on. It fits an 80 by
+24 terminal, which is the size an ssh session usually opens at. Under 84 columns the labels move above the fields they name and the mascot
 gives up its rows; nothing is ever cut off, and the two lines at the bottom say
 which keys do what rather than assuming you know.
 

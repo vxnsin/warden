@@ -295,10 +295,19 @@ def test_nothing_is_cut_off_on_an_eighty_column_terminal():
 def test_the_controls_are_on_screen_rather_than_assumed():
     async def scenario(app: Setup, pilot) -> None:
         hints = text_of(app, "#hints")
-        assert "tab" in hints and "space" in hints and "enter" in hints
+        assert "tab" in hints and "space" in hints and "pgup/pgdn" in hints
         assert not app.query_one("#status").display
 
     asking(scenario, size=(80, 24))
+
+
+def test_a_terminal_with_room_names_every_key_it_can():
+    async def scenario(app: Setup, pilot) -> None:
+        hints = text_of(app, "#hints")
+        for key in ("tab", "space", "enter", "pgup/pgdn"):
+            assert key in hints
+
+    asking(scenario, size=(120, 44))
 
 
 def test_a_message_takes_its_row_only_while_there_is_one():
@@ -315,5 +324,41 @@ def test_it_stays_in_one_piece_on_a_very_small_terminal():
     async def scenario(app: Setup, pilot) -> None:
         assert app.query_one("#hints").display
         assert app.query_one("#form").size.height > 0
+
+    asking(scenario, size=(60, 16))
+
+
+def test_the_form_scrolls_without_leaving_the_field_you_are_in():
+    async def scenario(app: Setup, pilot) -> None:
+        form = app.query_one("#form")
+        assert form.scroll_offset.y == 0
+        focused = app.focused
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert form.scroll_offset.y > 0
+        assert app.focused is focused
+        await pilot.press("pageup")
+        await pilot.pause()
+        assert form.scroll_offset.y == 0
+        await pilot.press("ctrl+q")
+
+    asking(scenario, settings(webhook="https://chat.example/hook"), size=(80, 24))
+
+
+def test_the_scroll_keys_are_named_where_they_can_be_read():
+    async def scenario(app: Setup, pilot) -> None:
+        assert "pgup/pgdn" in text_of(app, "#hints")
+
+    asking(scenario, size=(120, 44))
+
+
+def test_a_narrow_hint_keeps_the_keys_that_look_like_nothing():
+    """A menu still looks like a menu. A scroll key looks like nothing at all."""
+
+    async def scenario(app: Setup, pilot) -> None:
+        hints = text_of(app, "#hints")
+        assert "pgup/pgdn" in hints
+        assert "space toggles" in hints
+        assert len(hints) < 60
 
     asking(scenario, size=(60, 16))

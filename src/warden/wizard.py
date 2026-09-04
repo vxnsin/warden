@@ -32,7 +32,11 @@ WEBHOOK_KEYS = ("webhook", "webhook_format", "webhook_events", "webhook_secret")
 NARROW = 84
 
 # What the footer cannot say, because these belong to whatever has focus.
-HINTS = "tab moves  -  space toggles  -  enter opens a menu"
+HINTS = "tab moves  -  space toggles  -  enter opens a menu  -  pgup/pgdn scrolls"
+
+# The same, for a width that cannot hold it. A menu still looks like a menu;
+# a key that scrolls looks like nothing at all.
+TIGHT = "tab moves  -  space toggles  -  pgup/pgdn scrolls"
 
 COLOURS = {
     **PALETTE,
@@ -173,6 +177,9 @@ class Setup(App[dict[str, object] | None]):
         Binding("ctrl+t", "test", "Test webhook", priority=True),
         Binding("ctrl+q", "leave", "Quit", priority=True),
         Binding("escape", "leave", "Quit", show=False),
+        # Priority as well: an input would otherwise keep the whole form still.
+        Binding("pageup", "page_up", "Scroll up", show=False, priority=True),
+        Binding("pagedown", "page_down", "Scroll down", show=False, priority=True),
     ]
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -331,8 +338,10 @@ class Setup(App[dict[str, object] | None]):
         An 80 by 24 terminal over ssh is a real place this gets run, and it has
         no rows to spend on a mascot.
         """
-        self.screen.set_class(self.size.width < NARROW, "-narrow")
-        room = self.size.height >= BANNER_MIN_HEIGHT and self.size.width >= NARROW
+        narrow = self.size.width < NARROW
+        self.screen.set_class(narrow, "-narrow")
+        self.query_one("#hints", Static).update(TIGHT if narrow else HINTS)
+        room = self.size.height >= BANNER_MIN_HEIGHT and not narrow
         self.query_one("#banner").display = room
         self.query_one("#tagline").display = room
 
@@ -453,6 +462,12 @@ class Setup(App[dict[str, object] | None]):
 
     def action_leave(self) -> None:
         self.exit(None)
+
+    def action_page_up(self) -> None:
+        self.query_one("#form", VerticalScroll).scroll_page_up()
+
+    def action_page_down(self) -> None:
+        self.query_one("#form", VerticalScroll).scroll_page_down()
 
     def action_test(self) -> None:
         if not self._on("webhook-on"):
