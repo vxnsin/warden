@@ -68,6 +68,12 @@ def render(
         [f"warden_pool_available {pool.available}"],
     )
     lines += _metric(
+        "warden_pool_largest_run",
+        "Longest stretch of free ports in a row, which is what a contiguous request needs.",
+        "gauge",
+        [f"warden_pool_largest_run {pool.largest_run}"],
+    )
+    lines += _metric(
         "warden_pool_reserved",
         "Ports this warden will never hand out.",
         "gauge",

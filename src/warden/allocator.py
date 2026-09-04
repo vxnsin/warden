@@ -49,3 +49,17 @@ class PortPool:
             if port in self.reserved or port in taken:
                 continue
             yield port
+
+    def largest_run(self, taken: Collection[int]) -> int:
+        """The longest stretch of free ports in a row this pool still has.
+
+        A pool with forty free ports scattered one at a time cannot serve a
+        request for four in a row, and saying only "forty free" hides that.
+        """
+        longest = run = 0
+        previous: int | None = None
+        for port in self.candidates(taken):
+            run = run + 1 if previous is not None and port == previous + 1 else 1
+            previous = port
+            longest = max(longest, run)
+        return longest

@@ -903,6 +903,14 @@ def register(
         int | None, typer.Option(help="Release the port again after this many seconds.")
     ] = None,
     pid: Annotated[int | None, typer.Option(help="Process id of the service.")] = None,
+    count: Annotated[
+        int | None,
+        typer.Option(help="Claim this many ports at once, named <name>-1 upwards."),
+    ] = None,
+    contiguous: Annotated[
+        bool,
+        typer.Option("--contiguous", help="With --count, insist they run back to back."),
+    ] = False,
     node: NodeOption = None,
     url: UrlOption = None,
     token: TokenOption = None,
@@ -910,9 +918,38 @@ def register(
 ) -> None:
     """Claim a port and print it.
 
-    With `--node` the request goes through this warden to that one, which is
-    still the machine that decides.
+    With `--count` it claims several at once, named `<name>-1` upwards, and
+    either holds all of them or none. With `--node` a single request goes
+    through this warden to that one, which is still the machine that decides.
     """
+    if count is not None:
+        if node:
+            raise _fail(WardenError("--count registers here; ask that warden directly instead"))
+        if preferred_port or require_port:
+            raise _fail(
+                WardenError("a wish for one port and a request for several do not go together")
+            )
+        with _client(url, token) as client:
+            try:
+                group = client.register_group(
+                    name,
+                    kind=kind,
+                    count=count,
+                    contiguous=contiguous,
+                    project=project,
+                    host=host,
+                    ttl=ttl,
+                    pid=pid,
+                )
+            except WardenError as exc:
+                raise _fail(exc) from exc
+        if as_json:
+            _dump([service.model_dump(mode="json") for service in group])
+        else:
+            for service in group:
+                console.print(service.port)
+        return
+
     with _client(url, token) as client:
         try:
             service = client.register(
@@ -1302,11 +1339,16 @@ def pool(
     if as_json:
         _dump(status.model_dump(mode="json"))
     else:
-        console.print(
+        line = (
             f"{status.start}-{status.end}  "
             f"{status.allocated} allocated  {status.available} free  "
             f"{len(status.reserved)} reserved"
         )
+        # Only when it is the smaller number: that is the case where saying how
+        # many are free on their own would be misleading.
+        if status.largest_run < status.available:
+            line += f"  {status.largest_run} in a row"
+        console.print(line)
 
 
 def main() -> None:

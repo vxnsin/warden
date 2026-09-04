@@ -8,6 +8,7 @@ from warden.errors import PoolExhaustedError, PortUnavailableError, UnknownServi
 from warden.listeners import bound_ports, holding
 from warden.models import (
     Event,
+    GroupRequest,
     HeartbeatRequest,
     PoolStatus,
     Registration,
@@ -84,6 +85,93 @@ class Registry:
             raise PortUnavailableError(f"port {port} was claimed concurrently") from exc
         return registration, existing is None
 
+    def register_group(self, request: GroupRequest) -> list[Registration]:
+        """Hand out several ports at once, or none of them.
+
+        A stack that needs four ports asks four times today, and between the
+        first answer and the fourth registration anything else on the machine
+        can take one of them. The caller has no way to close that gap; this
+        does, by choosing and writing the whole set under one lock.
+        """
+        now = utcnow()
+        self.store.purge_expired(now)
+
+        names = request.members
+        existing = {name: self.store.get(name) for name in names}
+        ports = self._group_ports(request, existing)
+
+        group = [
+            Registration(
+                name=name,
+                kind=request.kind,
+                project=request.project,
+                host=request.host,
+                port=port,
+                pid=request.pid,
+                meta=request.meta,
+                ttl=request.ttl,
+                created_at=existing[name].created_at if existing[name] else now,
+                updated_at=now,
+                expires_at=now + timedelta(seconds=request.ttl) if request.ttl else None,
+            )
+            for name, port in zip(names, ports, strict=True)
+        ]
+        try:
+            self.store.save_many(group)
+        except sqlite3.IntegrityError as exc:
+            raise PortUnavailableError("a port in the group was claimed concurrently") from exc
+        return group
+
+    def _group_ports(
+        self, request: GroupRequest, existing: dict[str, Registration | None]
+    ) -> list[int]:
+        kept = self._group_kept(request, existing)
+        if kept is not None:
+            return kept
+        # The group's own ports are not in its way: writing a member moves it
+        # off the port it had, and that port is free the moment it does.
+        held = {
+            member.port
+            for member in existing.values()
+            if member is not None and member.host == request.host
+        }
+        return self._group_fresh(request, self.store.ports_on(request.host) - held)
+
+    def _group_kept(
+        self, request: GroupRequest, existing: dict[str, Registration | None]
+    ) -> list[int] | None:
+        """Where the group already is, when that is still somewhere it may be.
+
+        Asking twice must not shuffle a running stack onto different ports.
+        """
+        members = [existing[name] for name in request.members]
+        if any(member is None or member.host != request.host for member in members):
+            return None
+        ports = [member.port for member in members if member is not None]
+        if any(port not in self.pool for port in ports):
+            return None
+        if request.contiguous and ports != list(range(ports[0], ports[0] + len(ports))):
+            return None
+        return ports
+
+    def _group_fresh(self, request: GroupRequest, taken: set[int]) -> list[int]:
+        chosen: list[int] = []
+        for candidate in self.pool.candidates(taken):
+            if self.probe and is_bound(request.host, candidate):
+                continue
+            if request.contiguous and chosen and candidate != chosen[-1] + 1:
+                chosen = []
+            chosen.append(candidate)
+            if len(chosen) == request.count:
+                return chosen
+
+        where = f"{self.pool.start}-{self.pool.end} on {request.host}"
+        if request.contiguous:
+            raise PoolExhaustedError(f"no run of {request.count} free ports in {where}")
+        raise PoolExhaustedError(
+            f"only {len(chosen)} free ports in {where}, {request.count} asked for"
+        )
+
     def heartbeat(self, name: str, request: HeartbeatRequest) -> Registration:
         now = utcnow()
         registration = self.get(name)
@@ -107,7 +195,8 @@ class Registry:
 
     def pool_status(self) -> PoolStatus:
         self.store.purge_expired(utcnow())
-        allocated = sum(1 for reg in self.store.list() if reg.port in self.pool)
+        held = {reg.port for reg in self.store.list() if reg.port in self.pool}
+        allocated = len(held)
         usable = self.pool.size - len(self.pool.reserved)
         return PoolStatus(
             start=self.pool.start,
@@ -116,6 +205,7 @@ class Registry:
             reserved=sorted(self.pool.reserved),
             allocated=allocated,
             available=usable - allocated,
+            largest_run=self.pool.largest_run(held),
         )
 
     def _why_unavailable(self, host: str, port: int, taken: set[int]) -> str | None:

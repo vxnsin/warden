@@ -34,6 +34,7 @@ from warden.models import (
     FleetRegistration,
     FleetServices,
     FleetUpdate,
+    GroupRequest,
     Health,
     HeartbeatRequest,
     Listener,
@@ -204,6 +205,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def get_service(name: str, manager: Manager) -> Registration:
         return manager.get(name)
+
+    @v1.post(
+        "/groups",
+        summary="Register several ports for one thing at once",
+        status_code=status.HTTP_201_CREATED,
+        responses={
+            status.HTTP_409_CONFLICT: {"model": ErrorResponse},
+            status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse},
+        },
+    )
+    def register_group(request: GroupRequest, manager: Manager) -> list[Registration]:
+        return manager.register_group(request)
 
     @v1.post(
         "/services/{name}/heartbeat",
