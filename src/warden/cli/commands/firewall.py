@@ -10,8 +10,11 @@ from rich.table import Table
 from rich.text import Text
 
 from warden import theme
+from warden.cli import shared
 from warden.cli.shared import (
     JsonOption,
+    TokenOption,
+    UrlOption,
     _dump,
     _fail,
     app,
@@ -21,7 +24,7 @@ from warden.cli.shared import (
 from warden.core import store
 from warden.core.config import Settings
 from warden.errors import WardenError
-from warden.firewall import catalogue, guard
+from warden.firewall import catalogue, guard, link
 from warden.firewall import model as firewall
 from warden.firewall.backends import base
 
@@ -54,7 +57,7 @@ def _what(rule: firewall.Rule) -> str:
     if rule.protocol in (firewall.Protocol.ICMP, firewall.Protocol.ANY):
         return str(rule.protocol)
     known = catalogue.named(rule.protocol, rule.ports)
-    ports = ",".join(str(port) for port in sorted(rule.ports)) or "any"
+    ports = firewall.spelled(rule.ports) or "any"
     return f"{rule.protocol}/{ports}" + (f" ({known})" if known else "")
 
 
@@ -77,6 +80,34 @@ def _rules_table(rules: list[firewall.Rule]) -> Table:
     return table
 
 
+def _tidy(url: str | None = None, token: str | None = None) -> list[str]:
+    """Close every rule whose service is gone, before anything reads them.
+
+    A rule outliving its registration is the failure this whole link was
+    designed against, so it is checked wherever the rules are looked at rather
+    than only where they are written.
+    """
+    rules = _rules()
+    held = rules.list()
+    if not any(rule.origin is firewall.Origin.REGISTRY for rule in held):
+        return []
+    try:
+        with shared._client(url, token) as client:
+            services = client.services()
+    except WardenError:
+        # No warden to ask. Saying nothing is right: a rule is not stale just
+        # because the registry is not answering this minute.
+        return []
+    stale = link.reconcile(held, services)
+    rules.delete_many(stale)
+    return stale
+
+
+def _said_closed(closed: list[str]) -> None:
+    for name in closed:
+        errors.print(f"closed {name} - its service is gone", style=theme.BONE_DIM)
+
+
 @firewall_app.command("list")
 def firewall_list(
     origin: Annotated[
@@ -85,6 +116,7 @@ def firewall_list(
     as_json: JsonOption = False,
 ) -> None:
     """Every rule this machine holds, and where each one came from."""
+    _said_closed(_tidy())
     rules = _rules().list(origin=origin)
     if as_json:
         _dump([rule.model_dump(mode="json") for rule in rules])
@@ -193,6 +225,75 @@ def firewall_deny(
     except (WardenError, ValueError) as exc:
         raise _fail(WardenError(str(getattr(exc, "message", exc)))) from exc
     _write(rule, as_json)
+
+
+@firewall_app.command("open")
+def firewall_open(
+    service: Annotated[str, typer.Argument(help="A name the registry knows.")],
+    source: Annotated[
+        str, typer.Option("--from", help="Which network may reach it.")
+    ] = "",
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Open the port a registered service actually holds.
+
+    The registry knows which port that is and how long the service has it for,
+    so the rule inherits both. Nothing is opened by registering: this is a
+    person asking, and it is bounded by what the registry may ever open.
+    """
+    settings = Settings()
+    try:
+        with shared._client(url, token) as client:
+            known = link.found(client.services(), service)
+        rule = link.rule_for(
+            known,
+            source=source or _only_network(settings),
+            settings=settings,
+        )
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    _write(rule, as_json)
+
+
+def _only_network(settings: Settings) -> str:
+    """The one declared network, when there is exactly one to mean."""
+    allowed = sorted(settings.firewall_allow_from)
+    if len(allowed) == 1:
+        return allowed[0]
+    return "any"  # bounds refuses this, and says which networks are declared
+
+
+@firewall_app.command("dev-mode")
+def firewall_dev_mode(
+    source: Annotated[
+        str, typer.Option("--from", help="Which network may reach the pool.")
+    ] = "",
+    hours: Annotated[
+        float, typer.Option("--for", help="How many hours it stays open.")
+    ] = 2.0,
+    as_json: JsonOption = False,
+) -> None:
+    """Open the whole pool for a while, and close it again on its own.
+
+    For the afternoon somebody else needs to reach what you are running. It
+    cannot reach a port warden does not hand out, it says when it ends, and it
+    ends whether or not anyone remembers.
+    """
+    settings = Settings()
+    try:
+        rule = link.window(
+            settings, source or _only_network(settings), int(hours * 3600)
+        )
+    except WardenError as exc:
+        raise _fail(exc) from exc
+    _write(rule, as_json)
+    if not as_json:
+        console.print(
+            f"closes on its own at {rule.expires_at:%H:%M}",
+            style=theme.SHRIEKER,
+        )
 
 
 @firewall_app.command("delete")
