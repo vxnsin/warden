@@ -507,6 +507,10 @@ WARDEN_TOKEN=... WARDEN_CLUSTER_TOKEN=... docker compose up -d
 docker compose exec hub warden nodes
 ```
 
+Every change here builds that image and brings the three of them up in CI: the
+healthcheck has to pass, the hub has to see both nodes, and a port registered
+through the hub onto a node has to come back in `warden ls --all`.
+
 **A warden in a container sees the container's ports, not the host's.** Probing
 and `warden ports` describe the network namespace they run in, so a warden meant
 to manage the host's ports needs `network_mode: host` — and is then on the

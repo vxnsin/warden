@@ -21,3 +21,63 @@ jobs:
       - run: uv sync --all-groups --python ${{ matrix.python }}
       - run: uv run ruff check .
       - run: uv run pytest
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tokens that live as long as this run
+        run: |
+          echo "WARDEN_TOKEN=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+          echo "WARDEN_CLUSTER_TOKEN=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      # --wait returns only once every healthcheck has passed, so this exercises
+      # the HEALTHCHECK in the image and not merely the build.
+      - name: Build the image and bring the three wardens up
+        run: docker compose up --detach --build --wait
+
+      # A node announces itself as it starts, but the hub writing that down is
+      # not something the healthcheck waits for.
+      - name: The hub knows both nodes
+        run: |
+          cat > seen.py <<'PY'
+          import json, sys
+
+          nodes = {n["name"]: n["status"] for n in json.load(open("nodes.json"))}
+          missing = [n for n in ("build-01", "build-02") if nodes.get(n) != "online"]
+          if missing:
+              sys.exit(f"the hub does not have {missing} online: {nodes}")
+          PY
+          for _ in $(seq 30); do
+            docker compose exec -T hub warden nodes --json > nodes.json
+            if python3 seen.py > /dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          python3 seen.py
+
+      - name: A port asked for through the hub is handed out by the node
+        run: |
+          docker compose exec -T hub warden register ci-app --kind api --node build-01 --json > port.json
+          docker compose exec -T hub warden ls --all --json > fleet.json
+          python3 - <<'PY'
+          import json, sys
+
+          port = json.load(open("port.json"))["port"]
+          fleet = json.load(open("fleet.json"))
+          if fleet["unreachable"]:
+              sys.exit(f"the hub could not reach {fleet['unreachable']}")
+          found = [s for s in fleet["services"] if s["name"] == "ci-app"]
+          if len(found) != 1:
+              sys.exit(f"expected ci-app once across the fleet, got {found}")
+          if (found[0]["node"], found[0]["port"]) != ("build-01", port):
+              sys.exit(f"ci-app should be on build-01 at {port}: {found[0]}")
+          PY
+
+      - name: What the wardens said
+        if: always()
+        run: docker compose logs
+
+      - name: Tear it down
+        if: always()
+        run: docker compose down --volumes
