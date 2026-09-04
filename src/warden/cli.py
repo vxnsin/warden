@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import suppress
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, get_type_hints
 
@@ -12,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from warden import __version__, autostart, config, health, runner, store, theme
+from warden import __version__, autostart, config, export, health, runner, store, theme
 from warden.client import WardenClient
 from warden.config import Settings
 from warden.errors import WardenError
@@ -702,6 +703,50 @@ def history(
         )
         return
     console.print(_history_table(events))
+
+
+class Proxy(StrEnum):
+    caddy = "caddy"
+    nginx = "nginx"
+    traefik = "traefik"
+
+
+@app.command("export")
+def export_config(
+    proxy: Annotated[Proxy, typer.Argument(help="Which proxy this is for.")],
+    project: Annotated[str | None, typer.Option(help="Only this project.")] = None,
+    kind: Annotated[str | None, typer.Option(help="Only this kind of service.")] = None,
+    domain: Annotated[
+        str | None, typer.Option(help="Names become <service>.<domain>.")
+    ] = None,
+    every: Annotated[
+        bool, typer.Option("--all", help="Every warden in the fleet, not just this one.")
+    ] = False,
+    url: UrlOption = None,
+    token: TokenOption = None,
+) -> None:
+    """Write the proxy configuration for what is registered.
+
+    It prints and stops. Nothing is written in place, nothing is reloaded, and
+    where the result belongs stays your decision.
+    """
+    with _client(url, token) as client:
+        try:
+            here = client.health().node
+            nodes = client.nodes() if every else []
+            fleet = client.fleet_services(project=project, kind=kind) if every else None
+            services = (
+                fleet.services if fleet else client.services(project=project, kind=kind)
+            )
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+    # To stderr, so a machine that could not be asked is impossible to miss and
+    # still cannot end up in the file this was redirected into.
+    for missing in fleet.unreachable if fleet else []:
+        errors.print(f"{missing.node} ({missing.url}) {missing.reason}", style=theme.SHRIEKER)
+
+    print(export.render(proxy.value, services, node=here, nodes=nodes, domain=domain), end="")
 
 
 @app.command()
