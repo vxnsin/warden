@@ -111,3 +111,25 @@ class Policy(BaseModel):
     def live(self, now: datetime) -> list[Rule]:
         """What actually applies: enabled, and not outlived by its service."""
         return [rule for rule in self.rules if rule.enabled and not rule.expired(now)]
+
+
+def runs(ports: set[int]) -> list[tuple[int, int]]:
+    """Ports gathered into the stretches they actually form.
+
+    A thousand consecutive ports is one range to a firewall and one range to a
+    person; writing it out a thousand times serves neither.
+    """
+    gathered: list[tuple[int, int]] = []
+    for port in sorted(ports):
+        if gathered and port == gathered[-1][1] + 1:
+            gathered[-1] = (gathered[-1][0], port)
+        else:
+            gathered.append((port, port))
+    return gathered
+
+
+def spelled(ports: set[int], joiner: str = ",") -> str:
+    """Those stretches as text: `8000-8999`, or `80,443`."""
+    return joiner.join(
+        str(first) if first == last else f"{first}-{last}" for first, last in runs(ports)
+    )
