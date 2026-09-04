@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from contextlib import suppress
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -233,9 +235,22 @@ def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
             console.print("  It arrived.", style=theme.MOSS)
 
 
-@app.command()
-def setup() -> None:
-    """Ask the few questions that matter and write the answers down."""
+def _has_a_screen() -> bool:
+    """Whether a full-screen program can be drawn where this is running.
+
+    A terminal on its own is not enough. A machine with TERM unset or set to
+    dumb - a bare cron job, a serial console, some build runners - cannot draw
+    one, and finding that out from a traceback helps nobody.
+    """
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    if sys.platform == "win32":
+        return True
+    return os.environ.get("TERM", "") not in {"", "dumb"}
+
+
+def _setup_questions() -> dict[str, object]:
+    """The same questions, one at a time, for anything without a terminal."""
     _greet()
     current = Settings()
     console.print(f"Settings go to {config.config_file()}", style=theme.BONE_DIM)
@@ -274,8 +289,37 @@ def setup() -> None:
 
     _ask_about_webhooks(answers, current)
 
-    if typer.confirm("Allow stopping processes over the API?", default=current.allow_kill):
-        answers["allow_kill"] = True
+    answers["allow_kill"] = typer.confirm(
+        "Allow stopping processes over the API?", default=current.allow_kill
+    )
+    return answers
+
+
+@app.command()
+def setup(
+    plain: Annotated[
+        bool,
+        typer.Option("--plain", help="Ask one question at a time instead of a screenful."),
+    ] = False,
+) -> None:
+    """Ask the few questions that matter and write the answers down.
+
+    A terminal gets all of them on one screen. Anything else - a script piping
+    answers in, a job on a build machine - gets them one at a time, and
+    `--plain` asks for that on purpose.
+    """
+    if plain or not _has_a_screen():
+        answers = _setup_questions()
+    else:
+        # Imported here so the command line stays quick for everything that
+        # never opens a screen.
+        from warden.wizard import run
+
+        chosen = run()
+        if chosen is None:
+            console.print("Nothing written.", style=theme.BONE_DIM)
+            return
+        answers = chosen
 
     written = config.write(answers)
     console.print()
@@ -566,6 +610,13 @@ def tui(
     one warden at a time. A large fleet is worth a longer `--interval`, since
     every refresh asks every node.
     """
+    if not _has_a_screen():
+        raise _fail(
+            WardenError(
+                "this terminal cannot draw a screen; `warden ls` and `warden ports` "
+                "read the same things in plain text"
+            )
+        )
     from warden.tui import run
 
     run(url, token=token, interval=interval, fleet=every)
@@ -656,6 +707,12 @@ def list_services(
         )
 
 
+def _say_notes(starter: autostart.Autostart) -> None:
+    """Said out loud, because it is the difference between installed and working."""
+    for note in starter.notes():
+        errors.print(note, style=theme.SHRIEKER)
+
+
 def _plan_lines(plan: autostart.Plan) -> list[str]:
     """Everything installing would write or run, so it can be read first."""
     lines = [str(plan.path)] if plan.path else []
@@ -698,6 +755,7 @@ def service_install(
     except WardenError as exc:
         raise _fail(exc) from exc
     console.print(f"warden starts at login - {starter.status()}")
+    _say_notes(starter)
 
 
 @service_app.command("uninstall")
@@ -734,11 +792,13 @@ def service_status(as_json: JsonOption = False) -> None:
     except WardenError as exc:
         raise _fail(exc) from exc
 
+    notes = starter.notes()
     if as_json:
-        _dump({"kind": starter.kind, "status": state})
+        _dump({"kind": starter.kind, "status": state, "notes": notes})
         return
     colour = theme.MOSS if state == autostart.RUNNING else theme.BONE_DIM
     console.print(Text(state, style=colour), f"({starter.kind})")
+    _say_notes(starter)
 
 
 ACTION_COLOURS = {

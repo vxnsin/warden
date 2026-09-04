@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from textual.widgets import DataTable, Static
 
 from warden import theme
@@ -426,6 +427,7 @@ def run_without_a_warden(scenario, size=(120, 40)) -> None:
     asyncio.run(main())
 
 
+@pytest.mark.sockets
 def test_the_ports_of_this_machine_show_without_a_warden():
     async def scenario(app: WardenApp, pilot) -> None:
         await pilot.press("tab")
@@ -436,6 +438,7 @@ def test_the_ports_of_this_machine_show_without_a_warden():
     run_without_a_warden(scenario)
 
 
+@pytest.mark.sockets
 def test_it_says_whose_ports_those_are():
     async def scenario(app: WardenApp, pilot) -> None:
         await pilot.press("tab")

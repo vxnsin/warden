@@ -180,15 +180,16 @@ def sample() -> Event:
     )
 
 
-def send_one(settings: Settings, event: Event | None = None) -> str | None:
+async def post_once(settings: Settings, event: Event | None = None) -> str | None:
     """Post a single event now, and say what went wrong or nothing if it arrived.
 
     A webhook whose first exercise is the first real event is a webhook nobody
     finds out is wrong until it matters.
     """
+    async with httpx.AsyncClient(timeout=TIMEOUT) as http:
+        return await deliver(http, settings, event or sample())
 
-    async def once() -> str | None:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as http:
-            return await deliver(http, settings, event or sample())
 
-    return asyncio.run(once())
+def send_one(settings: Settings, event: Event | None = None) -> str | None:
+    """The same, for a caller with no event loop of its own."""
+    return asyncio.run(post_once(settings, event))

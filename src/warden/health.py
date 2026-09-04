@@ -13,7 +13,7 @@ import httpx
 from warden import __version__, theme
 from warden.client import WardenClient
 from warden.config import Settings, config_file, insecure
-from warden.errors import WardenError
+from warden.errors import NotPermittedError, WardenError
 from warden.listeners import GONE
 from warden.models import Health
 
@@ -129,6 +129,11 @@ def _pool(client: WardenClient) -> list[Check]:
 def _holders(client: WardenClient) -> list[Check]:
     try:
         services = client.services(holders=True)
+    except NotPermittedError:
+        # macOS will not enumerate sockets without root. Not knowing whether a
+        # holder is still there is worth saying out loud; it is not this
+        # machine being unwell, and it must not fail a health check.
+        return _without_holders(client)
     except WardenError as exc:
         return [Check(FAIL, f"cannot list services - {exc.message}")]
 
@@ -144,6 +149,20 @@ def _holders(client: WardenClient) -> list[Check]:
             )
         ]
     return [Check(OK, f"{_many(len(services), 'registration')}, every holder still there")]
+
+
+def _without_holders(client: WardenClient) -> list[Check]:
+    try:
+        services = client.services()
+    except WardenError as exc:
+        return [Check(FAIL, f"cannot list services - {exc.message}")]
+    return [
+        Check(
+            NOTE,
+            f"{_many(len(services), 'registration')}, holders not checked - this "
+            "system will not list sockets without root",
+        )
+    ]
 
 
 def _nodes(client: WardenClient, health: Health) -> list[Check]:

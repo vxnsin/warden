@@ -215,3 +215,56 @@ def test_setup_says_a_running_warden_keeps_what_it_started_with(posted: list):
     """Writing a webhook down and watching nothing arrive is a puzzling hour."""
     result = runner.invoke(app, ["setup"], input=BEFORE + "n\n" + AFTER)
     assert "already running keeps the settings it started with" in result.stdout
+
+
+class Terminal:
+    def isatty(self) -> bool:
+        return True
+
+
+class Pipe:
+    def isatty(self) -> bool:
+        return False
+
+
+def at_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli.sys, "stdin", Terminal())
+    monkeypatch.setattr(cli.sys, "stdout", Terminal())
+
+
+def test_a_terminal_on_linux_can_draw_a_screen(monkeypatch: pytest.MonkeyPatch):
+    at_a_terminal(monkeypatch)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setenv("TERM", "xterm-256color")
+    assert cli._has_a_screen()
+
+
+def test_a_terminal_that_cannot_draw_one_is_not_asked_to(monkeypatch: pytest.MonkeyPatch):
+    """A cron job on a Linux box has a terminal and no way to paint on it."""
+    at_a_terminal(monkeypatch)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    for term in ("dumb", ""):
+        monkeypatch.setenv("TERM", term)
+        assert not cli._has_a_screen()
+
+
+def test_windows_says_nothing_about_term(monkeypatch: pytest.MonkeyPatch):
+    at_a_terminal(monkeypatch)
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.delenv("TERM", raising=False)
+    assert cli._has_a_screen()
+
+
+def test_answers_piped_in_never_open_a_screen(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(cli.sys, "stdin", Pipe())
+    monkeypatch.setattr(cli.sys, "stdout", Terminal())
+    monkeypatch.setenv("TERM", "xterm-256color")
+    assert not cli._has_a_screen()
+
+
+def test_the_dashboard_says_so_rather_than_falling_over(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(cli, "_has_a_screen", lambda: False)
+    result = runner.invoke(app, ["tui"])
+    assert result.exit_code == 1
+    assert "cannot draw a screen" in result.stderr
+    assert "warden ls" in result.stderr

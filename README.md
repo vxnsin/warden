@@ -47,7 +47,13 @@ WARDEN column names the service whenever the port did come from the registry.
 column saying which machine each socket is on.
 
 Sockets owned by another user appear without a process name; run warden as
-administrator on Windows, or with `sudo` on Linux and macOS, to see those too.
+administrator on Windows, or with `sudo` on Linux, to see those too.
+
+**macOS is stricter than either.** It will not let an unprivileged process
+enumerate sockets at all, so `warden ports`, the dashboard's ports view,
+`warden ls --holders` and `warden reap` need `sudo` there and say so plainly
+when they do not have it. Nothing else is affected: handing out ports, the
+fleet, events, `warden apply` and `warden export` never read the socket table.
 
 ## Why
 
@@ -192,7 +198,9 @@ arrives, so it pipes into anything. `GET /v1/events` is the same stream as
 server-sent events, behind the same token as every other read.
 
 A webhook sends the same events somewhere else. `warden setup` asks for one and
-posts a test event, so you find out there and then whether it arrives:
+posts a test event, so you find out there and then whether it arrives. In a
+terminal that is a screen with a menu and tick boxes; anywhere else, and with
+`--plain`, the same questions come one at a time:
 
 ```
 $ warden setup
@@ -295,6 +303,23 @@ folder on Windows. It prints the whole thing before writing it, and
 `warden service uninstall` takes it away again. Always as the account that ran
 it — a warden started by root or SYSTEM would hand out ports from a registry
 nobody else can see.
+
+**On a Linux server, check that the account lingers.** A systemd user unit
+belongs to the user's session, and without lingering it stops when the last one
+ends — which on a server is the moment you log out of ssh, long after
+`warden service install` said it worked. warden looks, and says so:
+
+```sh
+$ warden service install
+...
+warden starts at login - running
+this account does not linger, so the unit stops when its last session ends -
+on a server, when you log out. `sudo loginctl enable-linger you` keeps it
+running.
+```
+
+It says it rather than doing it: enabling lingering needs root, and warden asks
+for nothing it does not need.
 
 ## Asking for a particular port
 
@@ -419,6 +444,11 @@ handed out and what is actually listening:
 | `r` | Reload now |
 | `d` | Release the service, or stop the process |
 | `q` | Quit |
+
+On a short terminal the mascot gives up its rows to the table, and a narrow one
+scrolls the table sideways rather than dropping columns. Over ssh at 80 by 24
+both views are readable, and the line under the table always says which keys do
+what.
 
 The dashboard reads both tables from the warden it is pointed at, so the ports
 it lists are the ones on *that* machine. Stopping a process from here goes
@@ -728,6 +758,38 @@ including why the restart is your command's job.
 warden setup       # answer a few questions, once
 warden settings    # see every value, and where it came from
 ```
+
+<img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/setup.svg" alt="warden setup" width="900">
+
+In a terminal, `warden setup` is one screen: tab between the fields, a menu for
+the webhook shape, tick boxes for which events are worth posting, and `ctrl+t`
+to post a test event before saving anything. Questions that nothing has earned
+stay hidden - there is no token to fill in until the warden is reachable from
+somewhere else, and no shape to pick until events are going anywhere at all.
+
+| Key | Action |
+| --- | --- |
+| `tab` `shift+tab` | Move between fields |
+| `space` | Toggle a switch or a tick box |
+| `enter` | Open a menu, or pick from it |
+| `pgup` `pgdn` | Scroll the form without leaving the field you are in |
+| `ctrl+t` | Post a test event to the address on screen |
+| `ctrl+s` | Save |
+| `ctrl+q` | Leave without writing anything |
+
+The mouse wheel scrolls too, where the terminal passes it on. It fits an 80 by
+24 terminal, which is the size an ssh session usually opens at. Under 84 columns the labels move above the fields they name and the mascot
+gives up its rows; nothing is ever cut off, and the two lines at the bottom say
+which keys do what rather than assuming you know.
+
+On a machine that has a terminal but cannot draw on one — `TERM` unset or set
+to `dumb`, which is what a cron job or a serial console gets — `warden setup`
+falls back to the questions instead of failing, and `warden tui` says so and
+points at `warden ls`.
+
+Without a terminal - a script piping answers in, a job on a build machine - the
+same questions come one at a time instead, and `warden setup --plain` asks for
+that on purpose.
 
 `warden setup` writes a file in the platform config directory, so a globally
 installed warden needs no environment at all. Settings still come from a flag,

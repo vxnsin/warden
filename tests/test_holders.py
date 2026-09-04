@@ -76,6 +76,7 @@ def test_a_live_process_on_a_bound_port_is_running():
     assert (status, reason) == (RUNNING, None)
 
 
+@pytest.mark.sockets
 def test_filling_in_holders_leaves_the_registrations_otherwise_alone(manager: Registry):
     manager.register(RegistrationRequest(name="api", kind="backend"))
     filled = manager.with_holders(manager.list())
@@ -99,6 +100,7 @@ def test_the_listing_says_nothing_about_holders_by_default(client: TestClient):
     assert client.get("/v1/services").json()[0]["holder"] is None
 
 
+@pytest.mark.sockets
 def test_the_listing_can_be_asked_for_holders(client: TestClient):
     client.post("/v1/services", json={"name": "api", "kind": "backend"})
     body = client.get("/v1/services", params={"holders": True}).json()

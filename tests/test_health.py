@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 from warden import __version__, cli, health
 from warden.cli import app
 from warden.config import Settings
-from warden.errors import UnknownServiceError, WardenError
+from warden.errors import NotPermittedError, UnknownServiceError, WardenError
 from warden.health import FAIL, NOTE, OK, WARN, Check, examine, exit_code
 from warden.listeners import GONE, RUNNING
 from warden.models import (
@@ -268,3 +268,26 @@ def test_a_hub_that_cannot_be_reached_is_a_failure(tmp_path, monkeypatch: pytest
     checks = examine(FakeClient(), edge(tmp_path))
     assert "cannot reach the warden at http://hub:7010" in text_of(checks, FAIL)
     assert exit_code(checks) == 1
+
+
+class RefusesHolders(FakeClient):
+    """A warden on a machine that will not enumerate its own sockets."""
+
+    def services(self, *, project=None, kind=None, holders=False):
+        if holders:
+            raise NotPermittedError("this system will not list sockets for your user")
+        return self._answer("services")
+
+
+def test_a_system_that_will_not_list_sockets_is_a_note_and_not_a_failure(settings: Settings):
+    """macOS refuses without root. That is not this machine being unwell."""
+    checks = examine(RefusesHolders(), settings)
+    assert FAIL not in levels(checks)
+    assert "holders not checked" in text_of(checks, NOTE)
+    assert exit_code(checks) == 0
+
+
+def test_a_listing_that_fails_for_any_other_reason_still_fails(settings: Settings):
+    broken = FakeClient(services=WardenError("the database is gone"))
+    checks = examine(broken, settings)
+    assert FAIL in levels(checks)

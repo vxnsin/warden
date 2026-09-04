@@ -129,6 +129,7 @@ def test_a_wish_and_a_demand_together_are_rejected(client: TestClient):
     assert response.status_code == 422
 
 
+@pytest.mark.sockets
 def test_the_listeners_of_this_machine_are_reported(client: TestClient):
     response = client.get("/v1/listeners")
     assert response.status_code == 200
@@ -275,6 +276,7 @@ def test_a_node_that_cannot_be_reached_is_named_in_the_fleet_pool(client: TestCl
     assert [p["node"] for p in body["pools"]] == ["hub"]
 
 
+@pytest.mark.sockets
 def test_the_fleet_ports_include_this_machines_own(client: TestClient):
     body = client.get("/v1/fleet/listeners").json()
     assert {item["node"] for item in body["listeners"]} <= {"hub"}
