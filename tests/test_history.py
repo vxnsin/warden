@@ -5,9 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from warden import cli
 from warden.api import create_app
-from warden.cli import app
+from warden.cli import app, shared
 from warden.core.config import Settings
 from warden.core.store import EXPIRED, MOVED, REGISTERED, RELEASED, RENEWED, Store
 from warden.models import Event, RegistrationRequest
@@ -157,7 +156,7 @@ def event(action: str = REGISTERED, name: str = "api", port: int = 8000) -> Even
 @pytest.fixture
 def recorded(monkeypatch: pytest.MonkeyPatch) -> FakeClient:
     fake = FakeClient([event(RELEASED), event(REGISTERED)])
-    monkeypatch.setattr(cli, "_client", lambda url, token: fake)
+    monkeypatch.setattr(shared, "_client", lambda url, token: fake)
     return fake
 
 
@@ -189,6 +188,6 @@ def test_every_event_is_shown_with_what_happened(recorded: FakeClient):
 def test_nothing_recorded_says_so_rather_than_printing_an_empty_table(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(cli, "_client", lambda url, token: FakeClient([]))
+    monkeypatch.setattr(shared, "_client", lambda url, token: FakeClient([]))
     result = runner_cli.invoke(app, ["history", "8000"])
     assert "nothing recorded for 8000" in result.output

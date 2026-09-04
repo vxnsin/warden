@@ -1,11 +1,13 @@
 import json
+import pkgutil
 import sys
 
 import pytest
 from typer.testing import CliRunner
 
-from warden import __version__, cli, theme
+from warden import __version__, theme
 from warden.cli import app
+from warden.cli.commands import machine
 from warden.models import FleetListener, FleetListeners
 
 runner_cli = CliRunner()
@@ -30,7 +32,7 @@ def fleet_ports(monkeypatch: pytest.MonkeyPatch) -> FleetListeners:
     found = FleetListeners(
         listeners=[socket_on("build-01", 9000), socket_on("hub", 3000)], unreachable=[]
     )
-    monkeypatch.setattr(cli, "_fleet_ports", lambda url, token, *, udp: (found, {}))
+    monkeypatch.setattr(machine, "_fleet_ports", lambda url, token, *, udp: (found, {}))
     return found
 
 
@@ -96,3 +98,33 @@ def test_run_says_nothing_is_registered_when_it_carries_on_anyway(monkeypatch):
     )
     assert result.exit_code == 0
     assert "unregistered" in result.output
+
+
+def test_every_command_module_is_found_without_being_listed():
+    """A group of commands is a file in the folder and nothing else."""
+    from warden.cli import commands
+
+    commands.load()
+    found = {module.name for module in pkgutil.iter_modules(commands.__path__)}
+    assert {"admin", "registry", "firewall", "fleet", "machine"} <= found
+
+
+def test_the_help_reads_in_the_order_the_modules_ask_for():
+    """Alphabetical is not how somebody meets a tool for the first time."""
+    from warden.cli import commands
+    from warden.cli.shared import app as loaded
+
+    commands.load()
+    order = [command.callback.__module__ for command in loaded.registered_commands]
+    seen = list(dict.fromkeys(order))
+    assert seen.index("warden.cli.commands.admin") < seen.index("warden.cli.commands.registry")
+    assert seen.index("warden.cli.commands.registry") < seen.index("warden.cli.commands.fleet")
+
+
+def test_the_command_line_still_answers_for_everything_it_used_to():
+    from warden.cli.shared import app as loaded
+
+    names = {command.name or command.callback.__name__ for command in loaded.registered_commands}
+    assert {"register", "ls", "ports", "doctor", "apply", "export", "events"} <= names
+    groups = {group.name for group in loaded.registered_groups}
+    assert groups == {"settings", "service", "firewall"}

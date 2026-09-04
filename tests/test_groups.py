@@ -4,9 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from warden import cli
 from warden.api import create_app
-from warden.cli import app
+from warden.cli import app, shared
 from warden.core.config import Settings
 from warden.core.store import Store
 from warden.errors import PoolExhaustedError
@@ -170,7 +169,7 @@ class FakeClient:
 
 
 def test_the_command_prints_one_port_per_line(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cli, "_client", lambda url, token: FakeClient())
+    monkeypatch.setattr(shared, "_client", lambda url, token: FakeClient())
     result = runner_cli.invoke(app, ["register", "stack", "--kind", "backend", "--count", "3"])
     assert result.exit_code == 0
     assert result.stdout.split() == ["8000", "8001", "8002"]
@@ -178,7 +177,7 @@ def test_the_command_prints_one_port_per_line(monkeypatch: pytest.MonkeyPatch):
 
 def test_the_command_passes_contiguous_on(monkeypatch: pytest.MonkeyPatch):
     fake = FakeClient()
-    monkeypatch.setattr(cli, "_client", lambda url, token: fake)
+    monkeypatch.setattr(shared, "_client", lambda url, token: fake)
     runner_cli.invoke(
         app, ["register", "stack", "--kind", "backend", "--count", "2", "--contiguous"]
     )
@@ -188,7 +187,7 @@ def test_the_command_passes_contiguous_on(monkeypatch: pytest.MonkeyPatch):
 def test_a_wish_for_one_port_and_a_request_for_several_do_not_go_together(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(cli, "_client", lambda url, token: FakeClient())
+    monkeypatch.setattr(shared, "_client", lambda url, token: FakeClient())
     result = runner_cli.invoke(
         app,
         ["register", "stack", "--kind", "backend", "--count", "2", "--require-port", "8000"],

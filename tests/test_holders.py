@@ -6,9 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from warden import cli
 from warden.api import create_app
-from warden.cli import app
+from warden.cli import app, shared
 from warden.core.config import Settings
 from warden.errors import UnknownServiceError
 from warden.models import Registration, RegistrationRequest
@@ -136,7 +135,7 @@ def stale(monkeypatch: pytest.MonkeyPatch) -> FakeClient:
         ),
     ]
     fake = FakeClient(services)
-    monkeypatch.setattr(cli, "_client", lambda url, token: fake)
+    monkeypatch.setattr(shared, "_client", lambda url, token: fake)
     return fake
 
 
@@ -174,7 +173,7 @@ def test_reaping_can_skip_the_questions(stale: FakeClient):
 
 def test_reaping_with_nothing_to_reap_says_so(monkeypatch: pytest.MonkeyPatch):
     fake = FakeClient([registration("api", 8000).model_copy(update={"holder": RUNNING})])
-    monkeypatch.setattr(cli, "_client", lambda url, token: fake)
+    monkeypatch.setattr(shared, "_client", lambda url, token: fake)
     result = runner_cli.invoke(app, ["reap", "--yes"])
     assert result.exit_code == 0
     assert "still there" in result.output

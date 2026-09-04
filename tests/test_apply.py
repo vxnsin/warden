@@ -5,9 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from warden import cli
 from warden.api import create_app
-from warden.cli import app
+from warden.cli import app, shared
 from warden.client import WardenClient
 from warden.core.config import Settings
 
@@ -38,7 +37,7 @@ class Borrowed(WardenClient):
 @pytest.fixture
 def project(settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     with TestClient(create_app(settings)) as served:
-        monkeypatch.setattr(cli, "_client", lambda url, token: Borrowed(served))
+        monkeypatch.setattr(shared, "_client", lambda url, token: Borrowed(served))
         monkeypatch.chdir(tmp_path)
         Path("warden.toml").write_text(MANIFEST, encoding="utf-8")
         yield tmp_path

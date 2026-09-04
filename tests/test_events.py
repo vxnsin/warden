@@ -7,9 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from warden import cli
 from warden.api import create_app
-from warden.cli import app
+from warden.cli import app, shared
 from warden.core import events as bus_module
 from warden.core.config import Settings
 from warden.core.events import EventBus, redacted
@@ -367,7 +366,7 @@ class FakeStream:
 
 def test_the_command_prints_a_line_per_event(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        cli, "_client", lambda url, token: FakeStream([an_event(), an_event(RELEASED)])
+        shared, "_client", lambda url, token: FakeStream([an_event(), an_event(RELEASED)])
     )
     result = runner_cli.invoke(app, ["events"])
     assert result.exit_code == 0
@@ -377,7 +376,7 @@ def test_the_command_prints_a_line_per_event(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_the_stream_can_be_piped_somewhere(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(cli, "_client", lambda url, token: FakeStream([an_event()]))
+    monkeypatch.setattr(shared, "_client", lambda url, token: FakeStream([an_event()]))
     result = runner_cli.invoke(app, ["events", "--json"])
     written = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     assert [event["action"] for event in written] == [REGISTERED]
