@@ -15,7 +15,7 @@ from __future__ import annotations
 import ipaddress
 from datetime import datetime
 
-from warden.config import Settings
+from warden.core.config import Settings
 from warden.errors import NotPermittedError
 from warden.firewall.model import ANYWHERE, Origin, Rule
 from warden.models import Registration

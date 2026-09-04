@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from warden import runner
 from warden.models import Registration
+from warden.ports import runner
 
 
 def registration(port: int = 8000, name: str = "shop-api") -> Registration:
@@ -80,7 +80,7 @@ def test_a_free_port_comes_out_of_the_pool():
 
 
 def test_the_free_port_is_actually_free():
-    from warden.allocator import is_bound
+    from warden.ports.allocator import is_bound
 
     assert is_bound("127.0.0.1", runner.free_port()) is False
 

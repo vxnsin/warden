@@ -7,7 +7,7 @@ from contextlib import suppress
 import httpx
 
 from warden import __version__
-from warden.config import Settings
+from warden.core.config import Settings
 
 logger = logging.getLogger("warden.upstream")
 

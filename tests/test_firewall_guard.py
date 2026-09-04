@@ -4,11 +4,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from warden.core.store import Snapshots, Store
 from warden.errors import FirewallError, NotPermittedError
 from warden.firewall import guard
 from warden.firewall.backends.base import Backend
 from warden.firewall.model import Policy, Rule
-from warden.store import Snapshots, Store
 
 
 class Machine(Backend):

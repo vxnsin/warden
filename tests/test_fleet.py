@@ -3,10 +3,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
+from warden.core.store import Store
 from warden.errors import NodeMovedError, NotPermittedError, UnknownNodeError
-from warden.fleet import Fleet
+from warden.fleet.nodes import Fleet
 from warden.models import NodeAnnouncement
-from warden.store import Store
 
 
 def announcement(name: str = "build-01", **kwargs) -> NodeAnnouncement:

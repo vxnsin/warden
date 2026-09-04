@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 from warden import __version__
 from warden.api import create_app
-from warden.config import Settings
-from warden.metrics import CONTENT_TYPE, render
+from warden.core.config import Settings
+from warden.core.metrics import CONTENT_TYPE, render
 from warden.models import Node, PoolStatus, Registration
 
 

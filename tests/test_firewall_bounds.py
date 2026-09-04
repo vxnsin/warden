@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from warden.config import Settings
+from warden.core.config import Settings
 from warden.errors import NotPermittedError
 from warden.firewall.bounds import closed_by, permitted
 from warden.firewall.model import Origin, Rule

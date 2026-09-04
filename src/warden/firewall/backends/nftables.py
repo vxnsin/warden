@@ -64,6 +64,7 @@ def line(rule: Rule) -> str:
 
 class Nftables(Backend):
     kind = "nftables"
+    systems = ("Linux",)
 
     def available(self) -> bool:
         return shutil.which("nft") is not None

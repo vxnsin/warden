@@ -3,10 +3,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from warden.allocator import PortPool
 from warden.errors import PoolExhaustedError, PortUnavailableError, UnknownServiceError
 from warden.models import HeartbeatRequest, RegistrationRequest
-from warden.service import Registry
+from warden.ports.allocator import PortPool
+from warden.ports.service import Registry
 
 
 def request(name: str, **kwargs) -> RegistrationRequest:

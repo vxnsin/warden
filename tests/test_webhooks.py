@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from warden import __version__, webhooks
+from warden import __version__
+from warden.core import webhooks
 from warden.models import Event
 
 

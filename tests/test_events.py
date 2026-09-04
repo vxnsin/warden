@@ -8,14 +8,14 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from warden import cli
-from warden import events as bus_module
 from warden.api import create_app
 from warden.cli import app
-from warden.config import Settings
-from warden.events import EventBus, redacted
+from warden.core import events as bus_module
+from warden.core.config import Settings
+from warden.core.events import EventBus, redacted
+from warden.core.store import EXPIRED, REGISTERED, RELEASED, RENEWED, Store
 from warden.models import Event, RegistrationRequest
-from warden.service import Registry
-from warden.store import EXPIRED, REGISTERED, RELEASED, RENEWED, Store
+from warden.ports.service import Registry
 
 runner_cli = CliRunner()
 

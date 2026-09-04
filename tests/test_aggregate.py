@@ -5,13 +5,13 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from warden import aggregate
 from warden.errors import (
     NotPermittedError,
     RelayedError,
     UnknownNodeError,
     UnknownServiceError,
 )
+from warden.fleet import aggregate
 from warden.models import Listener, Node, PoolStatus, Registration
 
 

@@ -4,9 +4,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from warden import aggregate
 from warden.api import create_app
-from warden.config import Settings
+from warden.core.config import Settings
+from warden.fleet import aggregate
 
 
 @pytest.fixture

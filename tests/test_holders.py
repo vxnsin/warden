@@ -9,11 +9,11 @@ from typer.testing import CliRunner
 from warden import cli
 from warden.api import create_app
 from warden.cli import app
-from warden.config import Settings
+from warden.core.config import Settings
 from warden.errors import UnknownServiceError
-from warden.listeners import GONE, RUNNING, SETTLING, holding
 from warden.models import Registration, RegistrationRequest
-from warden.service import Registry
+from warden.ports.listeners import GONE, RUNNING, SETTLING, holding
+from warden.ports.service import Registry
 
 runner_cli = CliRunner()
 

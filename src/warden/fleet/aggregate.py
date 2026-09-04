@@ -11,7 +11,7 @@ from typing import TypeVar
 import httpx
 
 from warden.client import detail_of
-from warden.config import insecure
+from warden.core.config import insecure
 from warden.errors import NotPermittedError, RelayedError, UnknownNodeError, UnknownServiceError
 from warden.models import (
     Duplicate,

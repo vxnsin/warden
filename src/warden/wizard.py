@@ -19,10 +19,11 @@ from textual.widget import Widget
 from textual.widgets import Footer, Input, Label, Select, SelectionList, Static, Switch
 from textual.widgets.selection_list import Selection
 
-from warden import config, theme, webhooks
-from warden.config import Settings
-from warden.events import post_once
-from warden.store import ACTIONS
+from warden import theme
+from warden.core import config, webhooks
+from warden.core.config import Settings
+from warden.core.events import post_once
+from warden.core.store import ACTIONS
 from warden.tui import BANNER_MIN_HEIGHT, PALETTE
 
 WEBHOOK_KEYS = ("webhook", "webhook_format", "webhook_events", "webhook_secret")

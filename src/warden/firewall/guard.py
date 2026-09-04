@@ -13,10 +13,10 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from warden.core.store import Snapshots
 from warden.errors import FirewallError
 from warden.firewall.backends.base import Backend
 from warden.firewall.model import Policy
-from warden.store import Snapshots
 
 APPLYING = "applying a policy"
 ADOPTING = "adopting another firewall"
@@ -124,11 +124,12 @@ def watch(database: str, until: datetime) -> None:
     Runs detached, because the whole point is outliving the session that armed
     it.
     """
-    from warden.firewall.backends.nftables import Nftables
-    from warden.store import Store
+    from warden.core.store import Store
+    from warden.firewall.backends.base import backend_for
 
     with Store(database) as store:
-        wait_out(Nftables(), Snapshots(store), until)
+        wait_out(backend_for(), Snapshots(store), until)
+
 
 def _sleep(seconds: float) -> None:
     import time

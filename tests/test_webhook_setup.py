@@ -3,8 +3,9 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from warden import cli, config
+from warden import cli
 from warden.cli import app
+from warden.core import config
 from warden.models import WebhookStatus
 
 runner = CliRunner()

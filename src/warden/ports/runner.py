@@ -9,11 +9,11 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from pathlib import Path
 
-from warden.allocator import PortPool, is_bound
 from warden.client import WardenClient
-from warden.config import Settings, slugify
+from warden.core.config import Settings, slugify
 from warden.errors import PoolExhaustedError, WardenError
 from warden.models import Registration
+from warden.ports.allocator import PortPool, is_bound
 
 
 def default_name() -> str:

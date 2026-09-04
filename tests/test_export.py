@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from typer.testing import CliRunner
 
-from warden import __version__, cli, export
+from warden import __version__, cli
 from warden.cli import app
 from warden.models import (
     FleetRegistration,
@@ -13,6 +13,7 @@ from warden.models import (
     Registration,
     Unreachable,
 )
+from warden.ports import export
 
 runner_cli = CliRunner()
 

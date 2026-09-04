@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from warden.config import Settings, reachable_from_elsewhere, slugify
+from warden.core.config import Settings, reachable_from_elsewhere, slugify
 
 
 def test_a_machine_name_is_bent_into_a_usable_node_name():

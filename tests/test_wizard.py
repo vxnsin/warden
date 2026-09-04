@@ -4,7 +4,7 @@ import pytest
 from textual.widgets import Input, Select, SelectionList, Static, Switch
 
 from warden import wizard
-from warden.config import Settings
+from warden.core.config import Settings
 from warden.wizard import Setup
 
 
