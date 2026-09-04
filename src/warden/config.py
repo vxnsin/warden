@@ -55,6 +55,16 @@ def parse_words(value: object) -> object:
 WordSet = Annotated[set[str], BeforeValidator(parse_words)]
 
 
+def parse_networks(value: object) -> object:
+    """Accept ``"10.0.0.0/8, 192.168.1.5"`` for sets of networks."""
+    if not isinstance(value, str):
+        return value
+    return {chunk.strip() for chunk in value.replace(";", ",").split(",") if chunk.strip()}
+
+
+NetworkSet = Annotated[set[str], BeforeValidator(parse_networks)]
+
+
 def default_database() -> Path:
     return user_data_path("warden", appauthor=False) / "registry.db"
 
@@ -172,6 +182,14 @@ class Settings(BaseSettings):
     webhook_events: WordSet = Field(default_factory=lambda: set(NOTABLE))
     webhook_secret: str | None = None
 
+    firewall_backend: str | None = None
+    firewall_rollback: int = Field(default=60, ge=0, le=3600)
+    # Off, and empty. Nothing declared is nothing allowed: a registry that may
+    # open ports out of the box would be a way around the firewall, not a
+    # firewall.
+    firewall_from_registry: bool = False
+    firewall_allow_from: NetworkSet = Field(default_factory=set)
+
     node: str = Field(default_factory=default_node)
     advertise: str | None = None
     upstream: str | None = None
@@ -202,6 +220,17 @@ class Settings(BaseSettings):
     @classmethod
     def _tidy_node(cls, value: str) -> str:
         return slugify(value)
+
+    @field_validator("firewall_allow_from")
+    @classmethod
+    def _real_networks(cls, value: set[str]) -> set[str]:
+        tidy = set()
+        for entry in value:
+            try:
+                tidy.add(str(ipaddress.ip_network(entry, strict=False)))
+            except ValueError:
+                raise ValueError(f"{entry!r} is not an address or a network") from None
+        return tidy
 
     @field_validator("webhook")
     @classmethod
