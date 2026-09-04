@@ -49,6 +49,37 @@ class RegistrationRequest(BaseModel):
         return self
 
 
+class GroupRequest(BaseModel):
+    """Several ports for one thing, asked for in one go.
+
+    No port wishes here. `require_port` for a group of four has no sensible
+    answer, and a caller who needs one particular port needs one registration.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Name
+    kind: Kind
+    count: int = Field(ge=1, le=64)
+    contiguous: bool = False
+    project: Project | None = None
+    host: str = "127.0.0.1"
+    pid: int | None = Field(default=None, ge=1)
+    ttl: int | None = Field(default=None, ge=1, le=86_400)
+    meta: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def members(self) -> list[str]:
+        return [f"{self.name}-{index}" for index in range(1, self.count + 1)]
+
+    @model_validator(mode="after")
+    def _members_can_be_named(self) -> GroupRequest:
+        longest = self.members[-1]
+        if len(longest) > 64:
+            raise ValueError(f"{longest!r} is too long a name for a service")
+        return self
+
+
 class HeartbeatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -101,6 +132,9 @@ class PoolStatus(BaseModel):
     reserved: list[int]
     allocated: int
     available: int
+    # What the registry knows, not what a probe would say: the longest stretch
+    # of free ports in a row, which is what a contiguous request needs.
+    largest_run: int = 0
 
 
 class NodeAnnouncement(BaseModel):

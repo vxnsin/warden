@@ -122,6 +122,40 @@ class WardenClient:
             )
         return Registration.model_validate(self._request("POST", "/v1/services", json=payload))
 
+    def register_group(
+        self,
+        name: str,
+        *,
+        kind: str,
+        count: int,
+        contiguous: bool = False,
+        project: str | None = None,
+        host: str = "127.0.0.1",
+        pid: int | None = None,
+        ttl: int | None = None,
+        meta: dict[str, str] | None = None,
+    ) -> list[Registration]:
+        """Several ports for one thing, named ``name-1`` upwards.
+
+        Chosen and written together, so the set is either wholly held or not
+        held at all - which is the part a caller asking four times cannot do.
+        """
+        payload = {
+            "name": name,
+            "kind": kind,
+            "count": count,
+            "contiguous": contiguous,
+            "project": project,
+            "host": host,
+            "pid": pid,
+            "ttl": ttl,
+            "meta": meta or {},
+        }
+        return [
+            Registration.model_validate(item)
+            for item in self._request("POST", "/v1/groups", json=payload)
+        ]
+
     def lookup(self, name: str) -> Registration:
         return Registration.model_validate(self._request("GET", f"/v1/services/{name}"))
 

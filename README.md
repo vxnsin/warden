@@ -293,6 +293,42 @@ warden register legacy-crm --kind backend --require-port 3000
 already in use. `--require-port` fails with `409` instead. Both may name a port
 outside the pool, which is how a legacy service on `3000` joins the registry.
 
+## More than one port at once
+
+A stack that needs four ports can ask four times and hope nothing takes one in
+between, or it can ask once:
+
+```sh
+$ warden register stack --kind backend --count 4
+8800
+8801
+8802
+8803
+```
+
+They come back as `stack-1` to `stack-4`, chosen and written under one lock, so
+either all four are held or none are. Asking again renews the same four rather
+than shuffling a running stack onto different ports.
+
+`--contiguous` insists they run back to back, for the tools that will not take
+a scattered set. When no run is long enough it says so and writes nothing,
+rather than handing back four ports that are not what was asked for:
+
+```sh
+$ warden register row --kind backend --count 6 --contiguous
+no run of 6 free ports in 8800-8809 on 127.0.0.1
+```
+
+`warden pool` says it before it comes to that, whenever the two numbers differ:
+
+```sh
+$ warden pool
+8800-8809  5 allocated  5 free  0 reserved  4 in a row
+```
+
+Five ports free, and the longest stretch of them in a row is four. Saying only
+"five free" would hide exactly the thing a contiguous request cares about.
+
 ## Dashboard
 
 ```sh
@@ -378,6 +414,7 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | `GET` | `/v1/events` | What is happening, as server-sent events, until you hang up |
 | `GET` | `/v1/webhook` | Where events are posted and whether they arrive |
 | `POST` | `/v1/services` | Register a service, `201` when new, `200` when renewed |
+| `POST` | `/v1/groups` | Register several ports for one thing, all of them or none |
 | `GET` | `/v1/services/{name}` | Look up one service |
 | `POST` | `/v1/services/{name}/heartbeat` | Extend a lease |
 | `DELETE` | `/v1/services/{name}` | Release a port |

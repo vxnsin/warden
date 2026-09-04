@@ -285,50 +285,68 @@ class Store:
         return [_row_to_event(row) for row in rows]
 
     def save(self, registration: Registration) -> None:
+        self.save_many([registration])
+
+    def save_many(self, registrations: list[Registration]) -> None:
+        """Write them all, or write none of them.
+
+        One transaction, because ports asked for together must never end up
+        half held - a caller told it has four ports and given three has no way
+        of knowing which promise to believe.
+        """
         with self._lock:
-            previous = self._db.execute(
-                "SELECT port FROM registrations WHERE name = ?", (registration.name,)
-            ).fetchone()
-            self._db.execute(
-                """
-                INSERT INTO registrations
-                    (name, kind, project, host, port, pid, meta, ttl,
-                     created_at, updated_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
-                    kind = excluded.kind,
-                    project = excluded.project,
-                    host = excluded.host,
-                    port = excluded.port,
-                    pid = excluded.pid,
-                    meta = excluded.meta,
-                    ttl = excluded.ttl,
-                    updated_at = excluded.updated_at,
-                    expires_at = excluded.expires_at
-                """,
-                (
-                    registration.name,
-                    registration.kind,
-                    registration.project,
-                    registration.host,
-                    registration.port,
-                    registration.pid,
-                    json.dumps(registration.meta, separators=(",", ":")),
-                    registration.ttl,
-                    _isoformat(registration.created_at),
-                    _isoformat(registration.updated_at),
-                    _isoformat(registration.expires_at),
-                ),
-            )
-            if previous is None:
-                action = REGISTERED
-            elif previous["port"] != registration.port:
-                action = MOVED
-            else:
-                action = RENEWED
-            self._record(action, registration, registration.updated_at)
+            try:
+                for registration in registrations:
+                    self._write(registration)
+            except Exception:
+                self._db.rollback()
+                self._pending.clear()
+                raise
             self._db.commit()
         self._announce()
+
+    def _write(self, registration: Registration) -> None:
+        previous = self._db.execute(
+            "SELECT port FROM registrations WHERE name = ?", (registration.name,)
+        ).fetchone()
+        self._db.execute(
+            """
+            INSERT INTO registrations
+                (name, kind, project, host, port, pid, meta, ttl,
+                 created_at, updated_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                kind = excluded.kind,
+                project = excluded.project,
+                host = excluded.host,
+                port = excluded.port,
+                pid = excluded.pid,
+                meta = excluded.meta,
+                ttl = excluded.ttl,
+                updated_at = excluded.updated_at,
+                expires_at = excluded.expires_at
+            """,
+            (
+                registration.name,
+                registration.kind,
+                registration.project,
+                registration.host,
+                registration.port,
+                registration.pid,
+                json.dumps(registration.meta, separators=(",", ":")),
+                registration.ttl,
+                _isoformat(registration.created_at),
+                _isoformat(registration.updated_at),
+                _isoformat(registration.expires_at),
+            ),
+        )
+        if previous is None:
+            action = REGISTERED
+        elif previous["port"] != registration.port:
+            action = MOVED
+        else:
+            action = RENEWED
+        self._record(action, registration, registration.updated_at)
 
     def delete(self, name: str) -> bool:
         with self._lock:
