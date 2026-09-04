@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -16,12 +17,13 @@ from fastapi import (
     Response,
     status,
 )
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from warden import __version__, aggregate, metrics, updates
 from warden.allocator import PortPool
 from warden.config import Settings
 from warden.errors import NotPermittedError, WardenError
+from warden.events import EventBus
 from warden.fleet import Fleet
 from warden.listeners import listeners, stop
 from warden.models import (
@@ -42,6 +44,7 @@ from warden.models import (
     RegistrationRequest,
     UpdateResult,
     UpdateStatus,
+    WebhookStatus,
 )
 from warden.service import Registry
 from warden.store import Store
@@ -70,6 +73,17 @@ def get_fleet(request: Request) -> Fleet:
 FleetDep = Annotated[Fleet, Depends(get_fleet)]
 
 
+def get_events(request: Request) -> EventBus:
+    return request.app.state.events
+
+
+Events = Annotated[EventBus, Depends(get_events)]
+
+# Long enough that a comment down an idle stream is rare, short enough that a
+# proxy in the middle does not decide the connection died.
+KEEPALIVE = 20.0
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
 
@@ -82,6 +96,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.fleet = Fleet(
             store, ttl=settings.node_ttl, require_https=settings.require_https
         )
+        bus = EventBus(settings)
+        bus.start()
+        store.subscribe(bus.publish)
+        app.state.events = bus
         # Reports in the background: a hub that is down must not hold up a node
         # that is perfectly able to hand out ports on its own.
         reporter = UpstreamReporter(settings)
@@ -94,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await watcher.stop()
             await reporter.stop()
+            await bus.stop()
             store.close()
 
     def _matches(secret: str | None, authorization: str | None) -> bool:
@@ -211,6 +230,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     ) -> list[Event]:
         return manager.history(port=port, name=name, limit=limit)
+
+    @reads.get(
+        "/events",
+        summary="What is happening, as it happens",
+        response_class=StreamingResponse,
+        responses={200: {"content": {"text/event-stream": {}}}},
+    )
+    async def stream(bus: Events) -> StreamingResponse:
+        async def lines() -> AsyncIterator[str]:
+            async with bus.watch() as queue:
+                # Sent straight away: a client should learn it is connected
+                # before anything happens, not after.
+                yield ": watching\n\n"
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), KEEPALIVE)
+                    except TimeoutError:
+                        yield ": still here\n\n"
+                        continue
+                    yield f"event: {event.action}\ndata: {event.model_dump_json()}\n\n"
+
+        return StreamingResponse(
+            lines(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @reads.get("/webhook", summary="Where events are posted, and whether that is working")
+    def webhook(bus: Events) -> WebhookStatus:
+        return bus.status
 
     @reads.get("/listeners", summary="Every socket bound on this machine")
     def list_listeners(udp: bool = True) -> list[Listener]:

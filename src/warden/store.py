@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from warden.models import Event, Node, Registration
+
+logger = logging.getLogger("warden.store")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS registrations (
@@ -61,6 +65,12 @@ RENEWED = "renewed"
 MOVED = "moved"
 RELEASED = "released"
 EXPIRED = "expired"
+
+ACTIONS = (REGISTERED, RENEWED, MOVED, RELEASED, EXPIRED)
+
+# Everything except a heartbeat keeping the port it already had. Sent to a chat
+# channel, that one event is the reason people mute the channel.
+NOTABLE = (REGISTERED, MOVED, RELEASED, EXPIRED)
 
 # Enough to answer "what had this port last week" on a busy machine, and few
 # enough that a warden left running for a year does not grow a database nobody
@@ -123,6 +133,8 @@ class Store:
         if isinstance(self.path, Path):
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._listeners: list[Callable[[Event], None]] = []
+        self._pending: list[Event] = []
         self._db = sqlite3.connect(str(self.path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode = WAL")
@@ -218,6 +230,38 @@ class Store:
             "DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?",
             (self.event_cap,),
         )
+        self._pending.append(
+            Event(
+                at=at,
+                action=action,
+                name=held["name"],
+                kind=held["kind"],
+                project=held["project"],
+                host=held["host"],
+                port=held["port"],
+                pid=held["pid"],
+            )
+        )
+
+    def subscribe(self, listener: Callable[[Event], None]) -> None:
+        """Hear about every change, once it is committed and not before."""
+        self._listeners.append(listener)
+
+    def _announce(self) -> None:
+        """Hand out the events of the change that just landed.
+
+        Called with the lock released, so a listener that takes its time cannot
+        stand between the next caller and a port. A listener that raises is its
+        own problem and never the writer's.
+        """
+        with self._lock:
+            pending, self._pending = self._pending, []
+        for event in pending:
+            for listener in self._listeners:
+                try:
+                    listener(event)
+                except Exception:
+                    logger.exception("a listener failed on %s %s", event.action, event.name)
 
     def history(
         self, *, port: int | None = None, name: str | None = None, limit: int = 100
@@ -284,6 +328,7 @@ class Store:
                 action = RENEWED
             self._record(action, registration, registration.updated_at)
             self._db.commit()
+        self._announce()
 
     def delete(self, name: str) -> bool:
         with self._lock:
@@ -294,6 +339,7 @@ class Store:
             if row is not None:
                 self._record(RELEASED, row, datetime.now(UTC))
             self._db.commit()
+        self._announce()
         return cursor.rowcount > 0
 
     def list_nodes(self) -> list[Node]:
@@ -361,4 +407,5 @@ class Store:
                 for row in rows:
                     self._record(EXPIRED, row, now)
                 self._db.commit()
+        self._announce()
         return [row["name"] for row in rows]

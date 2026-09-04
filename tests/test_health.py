@@ -11,7 +11,14 @@ from warden.config import Settings
 from warden.errors import UnknownServiceError, WardenError
 from warden.health import FAIL, NOTE, OK, WARN, Check, examine, exit_code
 from warden.listeners import GONE, RUNNING
-from warden.models import Health, Node, PoolStatus, Registration, UpdateStatus
+from warden.models import (
+    Health,
+    Node,
+    PoolStatus,
+    Registration,
+    UpdateStatus,
+    WebhookStatus,
+)
 
 runner_cli = CliRunner()
 
@@ -65,6 +72,7 @@ class FakeClient:
             "services": [registration("api", 8000)],
             "nodes": [],
             "update_status": UpdateStatus(current=__version__, available=False),
+            "webhook": WebhookStatus(configured=False),
         }
         self.answers.update(overrides)
 
@@ -88,6 +96,9 @@ class FakeClient:
 
     def update_status(self):
         return self._answer("update_status")
+
+    def webhook(self):
+        return self._answer("webhook")
 
     def __enter__(self) -> "FakeClient":
         return self

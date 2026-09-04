@@ -705,6 +705,38 @@ def history(
 
 
 @app.command()
+def events(
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Follow what happens, as it happens.
+
+    Runs until it is stopped, which is what makes it worth piping somewhere.
+    With `--json` that is one event per line, flushed as it arrives.
+    """
+    with _client(url, token) as client:
+        try:
+            for event in client.events():
+                if as_json:
+                    print(json.dumps(event.model_dump(mode="json"), default=str), flush=True)
+                    continue
+                line = Text(f"{event.at.astimezone():%H:%M:%S}  ", style=theme.BONE_DIM)
+                line.append(
+                    f"{event.action:<11}",
+                    style=ACTION_COLOURS.get(event.action, theme.BONE),
+                )
+                line.append(f"{event.name}  ")
+                line.append(event.address, style=theme.BONE_DIM)
+                console.print(line)
+        except WardenError as exc:
+            raise _fail(exc) from exc
+        except KeyboardInterrupt:
+            # Stopping a stream on purpose is not an error worth a traceback.
+            pass
+
+
+@app.command()
 def doctor(
     url: UrlOption = None,
     token: TokenOption = None,
