@@ -116,6 +116,30 @@ def account(user: str | None) -> str:
     return user.rsplit("\\", 1)[-1]
 
 
+ICONS = {
+    "section": ("▍", "|"),
+    "ok": ("✓", "+"),
+    "bad": ("✗", "x"),
+    "on": ("●", "*"),
+    "off": ("○", "-"),
+    "point": ("▸", ">"),
+}
+
+
+def icon(name: str, encoding: str | None = None) -> str:
+    """A glyph, or something a legacy code page can actually print.
+
+    Same reasoning as the banner: a decoration must never be the thing that
+    makes a command fall over.
+    """
+    glyph, plain = ICONS[name]
+    try:
+        glyph.encode(encoding or "utf-8")
+    except (LookupError, UnicodeEncodeError):
+        return plain
+    return glyph
+
+
 def _block_for(encoding: str | None) -> str:
     """The character to draw with.
 

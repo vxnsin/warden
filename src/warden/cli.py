@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from contextlib import suppress
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -233,9 +234,8 @@ def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
             console.print("  It arrived.", style=theme.MOSS)
 
 
-@app.command()
-def setup() -> None:
-    """Ask the few questions that matter and write the answers down."""
+def _setup_questions() -> dict[str, object]:
+    """The same questions, one at a time, for anything without a terminal."""
     _greet()
     current = Settings()
     console.print(f"Settings go to {config.config_file()}", style=theme.BONE_DIM)
@@ -274,8 +274,37 @@ def setup() -> None:
 
     _ask_about_webhooks(answers, current)
 
-    if typer.confirm("Allow stopping processes over the API?", default=current.allow_kill):
-        answers["allow_kill"] = True
+    answers["allow_kill"] = typer.confirm(
+        "Allow stopping processes over the API?", default=current.allow_kill
+    )
+    return answers
+
+
+@app.command()
+def setup(
+    plain: Annotated[
+        bool,
+        typer.Option("--plain", help="Ask one question at a time instead of a screenful."),
+    ] = False,
+) -> None:
+    """Ask the few questions that matter and write the answers down.
+
+    A terminal gets all of them on one screen. Anything else - a script piping
+    answers in, a job on a build machine - gets them one at a time, and
+    `--plain` asks for that on purpose.
+    """
+    if plain or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        answers = _setup_questions()
+    else:
+        # Imported here so the command line stays quick for everything that
+        # never opens a screen.
+        from warden.wizard import run
+
+        chosen = run()
+        if chosen is None:
+            console.print("Nothing written.", style=theme.BONE_DIM)
+            return
+        answers = chosen
 
     written = config.write(answers)
     console.print()

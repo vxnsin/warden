@@ -192,7 +192,9 @@ arrives, so it pipes into anything. `GET /v1/events` is the same stream as
 server-sent events, behind the same token as every other read.
 
 A webhook sends the same events somewhere else. `warden setup` asks for one and
-posts a test event, so you find out there and then whether it arrives:
+posts a test event, so you find out there and then whether it arrives. In a
+terminal that is a screen with a menu and tick boxes; anywhere else, and with
+`--plain`, the same questions come one at a time:
 
 ```
 $ warden setup
@@ -728,6 +730,18 @@ including why the restart is your command's job.
 warden setup       # answer a few questions, once
 warden settings    # see every value, and where it came from
 ```
+
+<img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/setup.svg" alt="warden setup" width="900">
+
+In a terminal, `warden setup` is one screen: tab between the fields, a menu for
+the webhook shape, tick boxes for which events are worth posting, and `ctrl+t`
+to post a test event before saving anything. Questions that nothing has earned
+stay hidden - there is no token to fill in until the warden is reachable from
+somewhere else, and no shape to pick until events are going anywhere at all.
+
+Without a terminal - a script piping answers in, a job on a build machine - the
+same questions come one at a time instead, and `warden setup --plain` asks for
+that on purpose.
 
 `warden setup` writes a file in the platform config directory, so a globally
 installed warden needs no environment at all. Settings still come from a flag,
