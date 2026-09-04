@@ -281,6 +281,12 @@ def setup() -> None:
     console.print()
     console.print(f"Written to {written}", style=theme.MOSS)
     console.print("`warden settings` shows what is in effect.", style=theme.BONE_DIM)
+    # A warden reads its settings once, when it starts. Writing a new webhook
+    # into the file and watching nothing arrive is otherwise a puzzling hour.
+    console.print(
+        "A warden that is already running keeps the settings it started with.",
+        style=theme.BONE_DIM,
+    )
 
 
 settings_app = typer.Typer(help="Show and change what is written down.")

@@ -209,3 +209,9 @@ def test_a_test_can_be_read_by_a_machine(monkeypatch: pytest.MonkeyPatch):
         "posted": False,
         "error": "timed out",
     }
+
+
+def test_setup_says_a_running_warden_keeps_what_it_started_with(posted: list):
+    """Writing a webhook down and watching nothing arrive is a puzzling hour."""
+    result = runner.invoke(app, ["setup"], input=BEFORE + "n\n" + AFTER)
+    assert "already running keeps the settings it started with" in result.stdout
