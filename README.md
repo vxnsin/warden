@@ -220,6 +220,34 @@ server having a bad afternoon can never make a port take longer to hand out.
 `warden doctor` says when the last one did not arrive, because from the inside
 a webhook that has been failing all day looks exactly like a quiet day.
 
+## Putting a proxy in front of it
+
+warden already knows every service by name and port, which is the whole of what
+a reverse proxy in front of them needs:
+
+```sh
+$ warden export caddy --domain example.com
+# Written by `warden export` from the warden on hub. Regenerate it; do not edit it.
+
+shop-api.example.com {
+	reverse_proxy 127.0.0.1:8000
+}
+```
+
+`caddy`, `nginx` and `traefik`. `--project` and `--kind` narrow it down, `--all`
+takes the whole fleet and points each service at the machine it actually runs
+on, and a service carrying a `domain` in its metadata keeps that name whatever
+`--domain` says.
+
+The header carries no timestamp on purpose. This output belongs in a
+repository, and a line that changes every run turns every regeneration into a
+diff worth reviewing.
+
+**It prints and stops.** Nothing is written in place, no proxy is reloaded, and
+where the file belongs is not warden's decision. A machine that could not be
+asked is named on stderr, so it can never end up in the file you redirected
+this into and can never be missed either.
+
 ## When something is not working
 
 ```sh
