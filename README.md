@@ -293,6 +293,58 @@ warden register legacy-crm --kind backend --require-port 3000
 already in use. `--require-port` fails with `409` instead. Both may name a port
 outside the pool, which is how a legacy service on `3000` joins the registry.
 
+## A project that says which ports it needs
+
+Which services a project has tends to live in whichever start script somebody
+wrote, and nowhere else. A `warden.toml` beside the code says it once, in
+something that gets committed and reviewed:
+
+```toml
+[project]
+name = "shop"
+
+[services.api]
+kind = "backend"
+
+[services.worker]
+kind = "worker"
+
+[services.web]
+kind = "frontend"
+preferred_port = 8905
+```
+
+```sh
+$ warden apply
+SERVICE      KIND      ADDRESS         WHAT
+shop-api     backend   127.0.0.1:8900  taken
+shop-worker  worker    127.0.0.1:8901  taken
+shop-web     frontend  127.0.0.1:8905  taken
+```
+
+Run it again and it says `renewed` three times and changes nothing. It renews
+what is there; it never shuffles a running project onto different ports.
+
+`warden apply --env .env` writes the ports where the code can read them:
+
+```sh
+# Written by `warden apply` from warden.toml. Regenerate it; do not edit it.
+SHOP_API_HOST=127.0.0.1
+SHOP_API_PORT=8900
+SHOP_WORKER_HOST=127.0.0.1
+SHOP_WORKER_PORT=8901
+```
+
+The whole file is rewritten every time and says so, because the one thing
+certain to happen otherwise is somebody editing it by hand and losing it.
+
+`warden apply --release` gives the project's ports back.
+
+**A half-registered project is not a state that exists.** Services that insist
+on a particular port are registered first, since those are the ones that can
+refuse the whole run — and if anything does fail, what the run took, the run
+gives back before it stops.
+
 ## More than one port at once
 
 A stack that needs four ports can ask four times and hope nothing takes one in
