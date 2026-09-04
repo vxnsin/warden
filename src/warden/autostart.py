@@ -7,6 +7,7 @@ ports from a registry nobody can see.
 
 from __future__ import annotations
 
+import getpass
 import os
 import platform
 import shutil
@@ -79,6 +80,10 @@ class Autostart:
     def status(self) -> str:
         raise NotImplementedError
 
+    def notes(self) -> list[str]:
+        """What is true of this machine that the plan alone does not say."""
+        return []
+
 
 class Systemd(Autostart):
     kind = "systemd user unit"
@@ -135,6 +140,38 @@ class Systemd(Autostart):
             return MISSING
         active = _run(["systemctl", "--user", "is-active", "warden.service"])
         return RUNNING if active.stdout.strip() == "active" else INSTALLED
+
+    def lingering(self) -> bool | None:
+        """Whether this account's services outlive its last session.
+
+        None when nothing can say - a container without logind, where the
+        question does not arise in the same shape.
+        """
+        try:
+            result = _run(
+                ["loginctl", "show-user", getpass.getuser(), "--property=Linger"]
+            )
+        except WardenError:
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip().endswith("=yes")
+
+    def notes(self) -> list[str]:
+        """The one thing that makes this look installed on a server and not be.
+
+        A user unit belongs to the user's session. Without lingering it stops
+        when the last one ends, which on a server is the moment you log out of
+        ssh - long after `warden service install` said it worked.
+        """
+        if self.lingering() is not False:
+            return []
+        user = getpass.getuser()
+        return [
+            "this account does not linger, so the unit stops when its last session "
+            f"ends - on a server, when you log out. `sudo loginctl enable-linger {user}` "
+            "keeps it running."
+        ]
 
 
 class Launchd(Autostart):

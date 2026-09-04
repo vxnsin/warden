@@ -209,6 +209,7 @@ class FakeStarter:
         self.state = state
         self.installed = False
         self.removed = False
+        self.remarks: list[str] = []
 
     def plan(self) -> Plan:
         return Plan(kind=self.kind, path=Path("/tmp/warden.service"), body="body", steps=["go"])
@@ -223,6 +224,9 @@ class FakeStarter:
 
     def status(self) -> str:
         return self.state
+
+    def notes(self) -> list[str]:
+        return self.remarks
 
 
 @pytest.fixture
@@ -285,3 +289,49 @@ def test_a_system_without_a_way_to_do_this_fails_rather_than_pretending(
 
     monkeypatch.setattr(autostart, "autostart_for", refuse)
     assert runner_cli.invoke(app, ["service", "status"]).exit_code == 1
+
+
+def test_a_unit_that_will_not_survive_a_logout_is_said_out_loud(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Installed and working are not the same thing on a server."""
+    unit = Systemd()
+    monkeypatch.setattr(unit, "lingering", lambda: False)
+    assert "enable-linger" in " ".join(unit.notes())
+    assert "log out" in " ".join(unit.notes())
+
+
+def test_a_lingering_account_is_not_nagged(monkeypatch: pytest.MonkeyPatch):
+    unit = Systemd()
+    monkeypatch.setattr(unit, "lingering", lambda: True)
+    assert unit.notes() == []
+
+
+def test_nothing_is_claimed_when_nothing_can_answer(monkeypatch: pytest.MonkeyPatch):
+    unit = Systemd()
+    monkeypatch.setattr(unit, "lingering", lambda: None)
+    assert unit.notes() == []
+
+
+def test_lingering_reads_what_loginctl_says(monkeypatch: pytest.MonkeyPatch):
+    for said, expected in {"Linger=yes": True, "Linger=no": False}.items():
+        monkeypatch.setattr(
+            autostart,
+            "_run",
+            lambda command, said=said: subprocess.CompletedProcess(command, 0, said, ""),
+        )
+        assert Systemd().lingering() is expected
+
+
+def test_a_machine_without_loginctl_is_not_guessed_about(monkeypatch: pytest.MonkeyPatch):
+    def missing(command):
+        raise WardenError("could not run loginctl")
+
+    monkeypatch.setattr(autostart, "_run", missing)
+    assert Systemd().lingering() is None
+
+
+def test_the_note_reaches_the_command_line(starter: FakeStarter):
+    starter.remarks = ["this account does not linger"]
+    result = runner_cli.invoke(app, ["service", "status"])
+    assert "does not linger" in result.stderr

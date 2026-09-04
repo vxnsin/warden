@@ -298,6 +298,23 @@ folder on Windows. It prints the whole thing before writing it, and
 it — a warden started by root or SYSTEM would hand out ports from a registry
 nobody else can see.
 
+**On a Linux server, check that the account lingers.** A systemd user unit
+belongs to the user's session, and without lingering it stops when the last one
+ends — which on a server is the moment you log out of ssh, long after
+`warden service install` said it worked. warden looks, and says so:
+
+```sh
+$ warden service install
+...
+warden starts at login - running
+this account does not linger, so the unit stops when its last session ends -
+on a server, when you log out. `sudo loginctl enable-linger you` keeps it
+running.
+```
+
+It says it rather than doing it: enabling lingering needs root, and warden asks
+for nothing it does not need.
+
 ## Asking for a particular port
 
 Two different wishes, two different fields:

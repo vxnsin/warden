@@ -707,6 +707,12 @@ def list_services(
         )
 
 
+def _say_notes(starter: autostart.Autostart) -> None:
+    """Said out loud, because it is the difference between installed and working."""
+    for note in starter.notes():
+        errors.print(note, style=theme.SHRIEKER)
+
+
 def _plan_lines(plan: autostart.Plan) -> list[str]:
     """Everything installing would write or run, so it can be read first."""
     lines = [str(plan.path)] if plan.path else []
@@ -749,6 +755,7 @@ def service_install(
     except WardenError as exc:
         raise _fail(exc) from exc
     console.print(f"warden starts at login - {starter.status()}")
+    _say_notes(starter)
 
 
 @service_app.command("uninstall")
@@ -785,11 +792,13 @@ def service_status(as_json: JsonOption = False) -> None:
     except WardenError as exc:
         raise _fail(exc) from exc
 
+    notes = starter.notes()
     if as_json:
-        _dump({"kind": starter.kind, "status": state})
+        _dump({"kind": starter.kind, "status": state, "notes": notes})
         return
     colour = theme.MOSS if state == autostart.RUNNING else theme.BONE_DIM
     console.print(Text(state, style=colour), f"({starter.kind})")
+    _say_notes(starter)
 
 
 ACTION_COLOURS = {
