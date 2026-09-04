@@ -29,6 +29,7 @@ from warden.models import (
     PoolStatus,
     Registration,
     UpdateStatus,
+    WebhookStatus,
 )
 
 _STATUS_ERRORS: dict[int, type[WardenError]] = {
@@ -175,6 +176,31 @@ class WardenClient:
             params["name"] = name
         payload = self._request("GET", "/v1/history", params=params)
         return [Event.model_validate(item) for item in payload]
+
+    def webhook(self) -> WebhookStatus:
+        """Where this warden posts events, and how that has been going."""
+        return WebhookStatus.model_validate(self._request("GET", "/v1/webhook"))
+
+    def events(self) -> Iterator[Event]:
+        """Every change as it happens, until the caller stops reading.
+
+        No timeout: the whole point is a connection that stays open through the
+        long quiet stretches where nothing is registered at all.
+        """
+        try:
+            with self._http.stream("GET", "/v1/events", timeout=None) as response:
+                if response.is_error:
+                    response.read()
+                    raise _STATUS_ERRORS.get(response.status_code, WardenError)(
+                        detail_of(response)
+                    )
+                for line in response.iter_lines():
+                    if line.startswith("data:"):
+                        yield Event.model_validate_json(line[len("data:") :].strip())
+        except httpx.ConnectError as exc:
+            raise WardenError(
+                f"no warden reachable at {self.url} - start one with 'warden serve'"
+            ) from exc
 
     def pool(self) -> PoolStatus:
         return PoolStatus.model_validate(self._request("GET", "/v1/pool"))

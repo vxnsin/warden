@@ -7,7 +7,7 @@ import socket
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from dotenv import dotenv_values
@@ -19,6 +19,8 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
+
+from warden.store import ACTIONS, NOTABLE
 
 DEFAULT_URL = "http://127.0.0.1:7010"
 
@@ -41,6 +43,16 @@ def parse_ports(value: object) -> object:
 
 
 PortSet = Annotated[set[int], BeforeValidator(parse_ports)]
+
+
+def parse_words(value: object) -> object:
+    """Accept ``"registered,released"`` for sets of names."""
+    if not isinstance(value, str):
+        return value
+    return {word.strip() for word in value.replace(";", ",").split(",") if word.strip()}
+
+
+WordSet = Annotated[set[str], BeforeValidator(parse_words)]
 
 
 def default_database() -> Path:
@@ -155,6 +167,11 @@ class Settings(BaseSettings):
     allow_remote_update: bool = False
     update_command: str | None = None
 
+    webhook: str | None = None
+    webhook_format: Literal["json", "discord", "slack", "teams"] = "json"
+    webhook_events: WordSet = Field(default_factory=lambda: set(NOTABLE))
+    webhook_secret: str | None = None
+
     node: str = Field(default_factory=default_node)
     advertise: str | None = None
     upstream: str | None = None
@@ -185,6 +202,23 @@ class Settings(BaseSettings):
     @classmethod
     def _tidy_node(cls, value: str) -> str:
         return slugify(value)
+
+    @field_validator("webhook")
+    @classmethod
+    def _postable(cls, value: str | None) -> str | None:
+        if value and urlparse(value).scheme not in {"http", "https"}:
+            raise ValueError(f"{value} is not somewhere anything can be posted")
+        return value
+
+    @field_validator("webhook_events")
+    @classmethod
+    def _known_events(cls, value: set[str]) -> set[str]:
+        unknown = sorted(value - set(ACTIONS))
+        if unknown:
+            raise ValueError(
+                f"no such event: {', '.join(unknown)}; there is only {', '.join(ACTIONS)}"
+            )
+        return value
 
     @field_validator("upstream", "advertise")
     @classmethod

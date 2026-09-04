@@ -177,6 +177,49 @@ Every registration, renewal, move, release and expiry is written down as it
 happens, so this still answers for a service released weeks ago.
 `warden history shop-api` follows one service instead of one port.
 
+## Hearing about it as it happens
+
+`warden history` answers afterwards. This answers while it is going on:
+
+```sh
+$ warden events
+09:41:02  registered   shop-api  127.0.0.1:8600
+09:41:44  released     shop-api  127.0.0.1:8600
+```
+
+`warden events --json` writes one event per line and flushes each as it
+arrives, so it pipes into anything. `GET /v1/events` is the same stream as
+server-sent events, behind the same token as every other read.
+
+A webhook sends the same events somewhere else:
+
+```sh
+warden settings set webhook https://discord.com/api/webhooks/...
+warden settings set webhook_format discord    # or slack, teams, json
+warden settings set webhook_events registered,released
+```
+
+`discord`, `slack` and `teams` post something the chat window renders as a
+message rather than a wall of JSON. `json` posts the event as it is, which is
+what anything custom should read, and signs it:
+
+```
+X-Warden-Signature: sha256=b1646dcf...
+```
+
+That is an HMAC over exactly the bytes that were sent, keyed with
+`WARDEN_WEBHOOK_SECRET`, so the far end can tell a post really came from this
+warden and not from whoever else found the address.
+
+Renewals are left out by default. A channel told about every heartbeat is a
+channel people mute within the week.
+
+**Nothing waits on a webhook.** Delivery happens after the change is committed
+and off the request path, retried three times and then given up on — a chat
+server having a bad afternoon can never make a port take longer to hand out.
+`warden doctor` says when the last one did not arrive, because from the inside
+a webhook that has been failing all day looks exactly like a quiet day.
+
 ## When something is not working
 
 ```sh
@@ -304,6 +347,8 @@ Base URL `http://127.0.0.1:7010`. Interactive docs at `/docs`.
 | `GET` | `/v1/pool` | Pool size, allocated, free, reserved |
 | `GET` | `/v1/services` | List registrations, filter by `project` and `kind`, `holders=true` for whether each is still there |
 | `GET` | `/v1/history` | What happened, filter by `port` and `name` |
+| `GET` | `/v1/events` | What is happening, as server-sent events, until you hang up |
+| `GET` | `/v1/webhook` | Where events are posted and whether they arrive |
 | `POST` | `/v1/services` | Register a service, `201` when new, `200` when renewed |
 | `GET` | `/v1/services/{name}` | Look up one service |
 | `POST` | `/v1/services/{name}/heartbeat` | Extend a lease |
@@ -571,6 +616,10 @@ setting. Each is also an environment variable with a `WARDEN_` prefix:
 | `WARDEN_UPDATE_CHECK` | `true` | Ask GitHub whether a newer release exists |
 | `WARDEN_ALLOW_REMOTE_UPDATE` | `false` | Let a caller ask this warden to update itself |
 | `WARDEN_UPDATE_COMMAND` | empty | What updating means on this machine |
+| `WARDEN_WEBHOOK` | empty | Address events are posted to |
+| `WARDEN_WEBHOOK_FORMAT` | `json` | `json`, `discord`, `slack` or `teams` |
+| `WARDEN_WEBHOOK_EVENTS` | all but `renewed` | Which events are worth posting |
+| `WARDEN_WEBHOOK_SECRET` | empty | Key the posted body is signed with |
 | `WARDEN_NODE` | machine name | This warden's name in the fleet |
 | `WARDEN_UPSTREAM` | empty | Hub to report to; empty means it is one |
 | `WARDEN_ADVERTISE` | from host and port | Address the hub should use to reach it |

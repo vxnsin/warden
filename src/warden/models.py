@@ -161,6 +161,25 @@ class Event(BaseModel):
         return f"{self.host}:{self.port}"
 
 
+class WebhookStatus(BaseModel):
+    """What became of the events this warden tried to post.
+
+    The address is cut back to its host on purpose. A webhook URL is a
+    credential, and its path is the half worth stealing.
+    """
+
+    configured: bool
+    target: str | None = None
+    format: str | None = None
+    actions: list[str] = Field(default_factory=list)
+    watching: int = 0
+    delivered: int = 0
+    failed: int = 0
+    dropped: int = 0
+    last_error: str | None = None
+    last_sent: datetime | None = None
+
+
 class Health(BaseModel):
     """What a warden says about itself when asked whether it is there."""
 

@@ -162,6 +162,31 @@ def _nodes(client: WardenClient, health: Health) -> list[Check]:
     ]
 
 
+def _webhook(client: WardenClient) -> list[Check]:
+    """Whether events are going anywhere, and whether they arrive.
+
+    A webhook that has been failing all day looks, from inside warden, exactly
+    like a week in which nothing happened. That is the whole reason for this.
+    """
+    try:
+        status = client.webhook()
+    except WardenError:
+        return []  # an older warden, which has nowhere to post anything
+    if not status.configured:
+        return []
+
+    where = f"events to {status.target} as {status.format}"
+    if status.last_error:
+        checks = [Check(WARN, f"{where} are not arriving - {status.last_error}")]
+    else:
+        checks = [Check(OK, f"{where}, {status.delivered} delivered")]
+        if status.failed:
+            checks.append(Check(NOTE, f"{status.failed} earlier ones never arrived"))
+    if status.dropped:
+        checks.append(Check(WARN, f"{status.dropped} events dropped - a reader fell behind"))
+    return checks
+
+
 def _updates(client: WardenClient) -> list[Check]:
     try:
         status = client.update_status()
@@ -183,6 +208,7 @@ def examine(client: WardenClient, settings: Settings) -> list[Check]:
     checks.extend(_upstream(settings))
     checks.extend(_pool(client))
     checks.extend(_holders(client))
+    checks.extend(_webhook(client))
     checks.extend(_nodes(client, health))
     checks.extend(_updates(client))
     return checks
