@@ -25,7 +25,7 @@ from warden.cli.shared import (
     errors,
     redacted,
 )
-from warden.core import autostart, config, happenings, health, webhooks
+from warden.core import autostart, config, happenings, health, moving, store, webhooks
 from warden.core.config import PARTS, Settings
 from warden.errors import WardenError
 
@@ -275,6 +275,89 @@ def setup(
         "A warden that is already running keeps the settings it started with.",
         style=theme.BONE_DIM,
     )
+
+
+state_app = typer.Typer(help="Take this machine's registrations and rules elsewhere.")
+app.add_typer(state_app, name="state")
+
+
+def _books() -> store.Store:
+    """This machine's own database, without a server in between."""
+    return store.Store(Settings().database)
+
+
+@state_app.command("export")
+def state_export() -> None:
+    """Write out the registrations and the rules, as JSON.
+
+    Not the history: it is a record of what happened on this machine and means
+    nothing on another. Not the snapshots either - a snapshot is some other
+    firewall's ruleset, and restoring one onto a different machine is the thing
+    the whole firewall design exists to make impossible by accident.
+    """
+    with _books() as books:
+        _dump(moving.taken(books))
+
+
+@state_app.command("import")
+def state_import(
+    where: Annotated[Path, typer.Argument(help="The file `warden state export` wrote.")],
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Say what would land, and land nothing.")
+    ] = False,
+    any_port: Annotated[
+        bool,
+        typer.Option(
+            "--any-port",
+            help="Let a service outside this machine's pool take a free port instead.",
+        ),
+    ] = False,
+) -> None:
+    """Put another machine's registrations and rules on this one.
+
+    A row at a time. A name already registered here, or a port this machine
+    does not hand out, is one row's problem rather than a reason to refuse the
+    other forty - and every one of them is named.
+    """
+    try:
+        services, rules = moving.read(where.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise _fail(WardenError(f"cannot read {where}: {exc.strerror or exc}")) from exc
+    except WardenError as exc:
+        raise _fail(exc) from exc
+
+    with _books() as books:
+        landed = moving.land(
+            books,
+            services,
+            rules,
+            settings=Settings(),
+            keep_ports=not any_port,
+            dry_run=dry_run,
+        )
+
+    for name in landed.services:
+        console.print(f"  service  {name}", style=theme.MOSS)
+    for name in landed.rules:
+        console.print(f"  rule     {name}", style=theme.MOSS)
+    for said in landed.skipped:
+        console.print(f"  skipped  {said}", style=theme.SHRIEKER)
+
+    console.print()
+    if dry_run:
+        console.print(
+            f"{landed.count} would land, {len(landed.skipped)} would not - "
+            "nothing was written",
+            style=theme.BONE_DIM,
+        )
+        return
+    console.print(f"{landed.count} landed, {len(landed.skipped)} did not", style=theme.BONE_DIM)
+    if landed.rules:
+        console.print(
+            "the rules are written down and not applied - "
+            "`warden firewall apply` makes them true",
+            style=theme.BONE_DIM,
+        )
 
 
 settings_app = typer.Typer(help="Show and change what is written down.")

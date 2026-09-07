@@ -401,6 +401,9 @@ The wiki is the long form. This page is the tour.
 - **macOS will not let an unprivileged process enumerate sockets**, so
   `warden ports`, the dashboard's ports view, `warden ls --holders` and
   `warden reap` need `sudo` there. Handing out ports does not.
+- **Rebuilding a machine? `warden state export` takes the registrations and the
+  rules with you**, and `warden state import --dry-run` says what would land
+  before anything does. The history and the snapshots stay where they happened.
 - **On a Linux server, check that your account lingers.** A systemd user unit
   stops when your last session ends. `warden service install` looks and says so.
 

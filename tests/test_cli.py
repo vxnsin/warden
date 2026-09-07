@@ -127,4 +127,6 @@ def test_the_command_line_still_answers_for_everything_it_used_to():
     names = {command.name or command.callback.__name__ for command in loaded.registered_commands}
     assert {"register", "ls", "ports", "doctor", "apply", "export", "events"} <= names
     groups = {group.name for group in loaded.registered_groups}
-    assert groups == {"settings", "service", "firewall"}
+    # Everything that was a group stayed one. New ones are somebody else's
+    # test; this one is about nothing having quietly gone missing.
+    assert {"settings", "service", "firewall"} <= groups
