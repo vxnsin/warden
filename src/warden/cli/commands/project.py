@@ -192,6 +192,7 @@ class Proxy(StrEnum):
     caddy = "caddy"
     nginx = "nginx"
     traefik = "traefik"
+    hosts = "hosts"
 
 
 @app.command("export")
@@ -205,14 +206,27 @@ def export_config(
     every: Annotated[
         bool, typer.Option("--all", help="Every warden in the fleet, not just this one.")
     ] = False,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="For `hosts`: write it into this machine's hosts file."),
+    ] = False,
     url: UrlOption = None,
     token: TokenOption = None,
 ) -> None:
     """Write the proxy configuration for what is registered.
 
     It prints and stops. Nothing is written in place, nothing is reloaded, and
-    where the result belongs stays your decision.
+    where the result belongs stays your decision - except with `hosts --apply`,
+    which is asked for on purpose and touches only the lines between warden's
+    own two markers.
     """
+    if apply and proxy is not Proxy.hosts:
+        raise _fail(
+            WardenError(
+                f"--apply is only for `hosts`; where a {proxy.value} configuration "
+                "belongs, and when it is reloaded, is not warden's decision"
+            )
+        )
     with shared._client(url, token) as client:
         try:
             here = client.health().node
@@ -229,4 +243,28 @@ def export_config(
     for missing in fleet.unreachable if fleet else []:
         errors.print(f"{missing.node} ({missing.url}) {missing.reason}", style=theme.SHRIEKER)
 
-    print(export.render(proxy.value, services, node=here, nodes=nodes, domain=domain), end="")
+    said = export.render(proxy.value, services, node=here, nodes=nodes, domain=domain)
+    if not apply:
+        print(said, end="")
+        return
+    _into_the_hosts_file(said)
+
+
+def _into_the_hosts_file(block: str) -> None:
+    """Replace warden's own lines, and touch nothing else in the file."""
+    where = export.hosts_file()
+    try:
+        existing = where.read_text(encoding="utf-8") if where.is_file() else ""
+        where.write_text(export.between_the_markers(existing, block), encoding="utf-8")
+    except OSError as exc:
+        raise _fail(
+            WardenError(
+                f"cannot write {where}: {exc.strerror or exc} - a hosts file needs "
+                "root, or an elevated prompt on Windows"
+            )
+        ) from exc
+    console.print(f"written into {where}", style=theme.MOSS)
+    console.print(
+        "only the lines between `# warden: begin` and `# warden: end`",
+        style=theme.BONE_DIM,
+    )

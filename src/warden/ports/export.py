@@ -7,7 +7,9 @@ are decisions this program has no business making.
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from warden.errors import WardenError
@@ -16,8 +18,25 @@ from warden.models import FleetRegistration, Node, Registration
 CADDY = "caddy"
 NGINX = "nginx"
 TRAEFIK = "traefik"
+HOSTS = "hosts"
 
-FORMATS = (CADDY, NGINX, TRAEFIK)
+FORMATS = (CADDY, NGINX, TRAEFIK, HOSTS)
+
+# What warden's own lines in somebody else's file are wrapped in, so a rewrite
+# can find them again and leave everything around them alone.
+BEGIN = "# warden: begin"
+END = "# warden: end"
+
+# Stood in for while a builder runs, because a builder is handed the services
+# and not the name of the warden they came from.
+NODE_HERE = "{this warden}"
+
+
+def hosts_file() -> Path:
+    """Where this machine keeps the names it answers for itself."""
+    if os.name == "nt":
+        return Path(os.environ.get("SYSTEMROOT", "C:/Windows")) / "System32/drivers/etc/hosts"
+    return Path("/etc/hosts")
 
 # Deliberately without a timestamp. This output belongs in a repository, and a
 # header that changes every run turns every regeneration into a diff.
@@ -118,9 +137,41 @@ def _traefik(
     return routers + backends + [""]
 
 
-BUILDERS = {CADDY: _caddy, NGINX: _nginx, TRAEFIK: _traefik}
+def _hosts(services: list[Registration], nodes: dict[str, str], domain: str | None) -> list[str]:
+    """Names a resolver will answer for, which is half of what a name is for.
 
-COMMENT = {CADDY: "#", NGINX: "#", TRAEFIK: "#"}
+    A hosts file has no ports in it, so this gets somebody to the machine and
+    the proxy shapes above get them to the service. Worth having anyway: most
+    machines somebody is developing on have no proxy in front of anything.
+    """
+    lines: list[str] = [BEGIN, f"# {HEADER.format(node=NODE_HERE)}"]
+    for service in services:
+        where = address(service, nodes).rpartition(":")[0]
+        lines.append(f"{where}\t{hostname(service, domain)}")
+    lines.append(END)
+    return lines
+
+
+BUILDERS = {CADDY: _caddy, NGINX: _nginx, TRAEFIK: _traefik, HOSTS: _hosts}
+
+COMMENT = {CADDY: "#", NGINX: "#", TRAEFIK: "#", HOSTS: "#"}
+
+
+def between_the_markers(existing: str, block: str) -> str:
+    """Put the block back where warden's last one was, and nowhere else.
+
+    A hosts file is somebody else's file with warden's few lines in it. The
+    same rule `warden firewall adopt` follows for another program's output:
+    find what is ours, replace only that, and leave the rest exactly as it is.
+    """
+    lines = existing.splitlines()
+    try:
+        start = lines.index(BEGIN)
+        end = lines.index(END, start)
+    except ValueError:
+        kept = [line for line in lines if line.strip()]
+        return "\n".join([*kept, "", *block.splitlines()]).rstrip("\n") + "\n"
+    return "\n".join([*lines[:start], *block.splitlines(), *lines[end + 1 :]]).rstrip("\n") + "\n"
 
 
 def render(
@@ -133,6 +184,8 @@ def render(
 ) -> str:
     """One proxy's worth of configuration, ready to be redirected into a file."""
     ordered = sorted(services, key=lambda service: service.name)
-    lines = [f"{COMMENT[shape]} {HEADER.format(node=node)}", ""]
+    # The hosts block carries its own header between the markers, so a rewrite
+    # replaces the explanation along with the lines it explains.
+    lines = [] if shape == HOSTS else [f"{COMMENT[shape]} {HEADER.format(node=node)}", ""]
     lines += BUILDERS[shape](ordered, node_hosts(nodes or []), domain)
-    return "\n".join(lines).rstrip("\n") + "\n"
+    return "\n".join(lines).rstrip("\n").replace(NODE_HERE, node) + "\n"

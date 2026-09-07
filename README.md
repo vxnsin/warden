@@ -171,6 +171,19 @@ shop-api.example.com {
 `caddy`, `nginx` and `traefik`. `--all` takes the whole fleet and points each
 service at the machine it actually runs on. It prints and stops: nothing is
 written in place, and no proxy is reloaded.
+
+**And where there is no proxy at all**, which is most machines somebody is
+developing on, `hosts` writes the names a resolver will answer for:
+
+```sh
+$ sudo warden export hosts --domain test --apply
+written into /etc/hosts
+only the lines between `# warden: begin` and `# warden: end`
+```
+
+A hosts file has no ports, so that gets you to the machine and the proxy shapes
+get you to the service. Running it again replaces rather than repeats, and every
+other line in the file is left exactly as it was.
 [Reverse proxy](https://github.com/vxnsin/warden/wiki/Reverse-proxy) has the
 rest.
 
