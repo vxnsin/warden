@@ -314,6 +314,31 @@ class Setup(App[dict[str, object] | None]):
                             "post came from here.",
                         )
 
+                yield self._heading("FIREWALL")
+                yield from self._field(
+                    "Let the registry open its ports",
+                    Switch(current.firewall_from_registry, id="firewall-on"),
+                    "Off means a registration can never open anything, which is "
+                    "the safe answer unless you need it.",
+                )
+                with Vertical(id="firewall-extra", classes="group"):
+                    yield from self._field(
+                        "Networks it may open to",
+                        Input(
+                            ", ".join(sorted(current.firewall_allow_from)),
+                            placeholder="10.0.0.0/8",
+                            id="firewall-from",
+                        ),
+                        "Your decision, made once. Nothing declared is nothing "
+                        "allowed, and a port outside the pool is never reachable.",
+                    )
+                    yield from self._field(
+                        "Seconds to confirm a change",
+                        Input(str(current.firewall_rollback), id="firewall-rollback"),
+                        "A change nobody confirms undoes itself. 0 turns that off.",
+                    )
+                yield Static("", id="firewall-found", classes="hint")
+
                 yield self._heading("RISK")
                 yield from self._field(
                     "Stopping processes over the API",
@@ -328,7 +353,27 @@ class Setup(App[dict[str, object] | None]):
         self._fit()
         self._reveal()
         self.query_one("#status").display = False
+        self._look_for_another_firewall()
         self.query_one("#pool", Input).focus()
+
+    @work(thread=True)
+    def _look_for_another_firewall(self) -> None:
+        """Say if something else is holding this machine's packets.
+
+        Only ever says. Taking over is `warden firewall adopt`, which reads the
+        other one's rules and shows them first - not something to slip into a
+        settings screen.
+        """
+        from warden.firewall.adopt import managing
+
+        found = managing()
+        if not found:
+            return
+        self.call_from_thread(
+            self.query_one("#firewall-found", Static).update,
+            f"{theme.listed(found)} is holding this machine - "
+            "`warden firewall adopt` reads its rules and takes over from it",
+        )
 
     def on_resize(self) -> None:
         self._fit()
@@ -360,6 +405,7 @@ class Setup(App[dict[str, object] | None]):
         self.query_one("#webhook-extra").display = posting
         # Only the plain shape is signed, so only it is asked for a secret.
         self.query_one("#secret-field").display = posting and self._shape() == webhooks.JSON
+        self.query_one("#firewall-extra").display = self._on("firewall-on")
 
     def _on(self, field: str) -> bool:
         return self.query_one(f"#{field}", Switch).value
@@ -417,8 +463,30 @@ class Setup(App[dict[str, object] | None]):
             answers["cluster_token"] = self._text("cluster-token")
 
         answers["allow_kill"] = self._on("allow-kill")
+        answers.update(self._firewall_answers())
         answers.update(self._webhook_answers())
         return answers
+
+    def _firewall_answers(self) -> dict[str, object]:
+        try:
+            answers: dict[str, object] = {
+                "firewall_rollback": int(self._text("firewall-rollback") or 0)
+            }
+        except ValueError:
+            raise AnswerError(
+                "the seconds to wait for a confirmation have to be a number",
+                "firewall-rollback",
+            ) from None
+        if not self._on("firewall-on"):
+            # Saying no has to be able to undo a yes.
+            return {**answers, "firewall_from_registry": False, "firewall_allow_from": ""}
+
+        where = self._text("firewall-from")
+        if not where:
+            raise AnswerError(
+                "name the networks the registry may open ports to", "firewall-from"
+            )
+        return {**answers, "firewall_from_registry": True, "firewall_allow_from": where}
 
     def _webhook_answers(self) -> dict[str, object]:
         if not self._on("webhook-on"):

@@ -113,3 +113,36 @@ def test_a_manifest_that_is_not_there_is_said_plainly(
     result = runner_cli.invoke(app, ["apply"])
     assert result.exit_code == 1
     assert "write one, or say --file" in result.stderr
+
+
+def test_the_manifest_has_its_own_name_now(project: Path):
+    """Two files called warden.toml in two places was a question waiting to be
+    asked by somebody debugging at midnight."""
+    Path("warden.toml").unlink()
+    Path("warden.project.toml").write_text(MANIFEST, encoding="utf-8")
+    done = applied()
+    assert [service["name"] for service in done["services"]] == ["shop-api", "shop-worker"]
+
+
+def test_the_old_name_still_works_and_says_to_rename_it(project: Path):
+    result = runner_cli.invoke(app, ["apply"])
+    assert result.exit_code == 0
+    assert "is also what the settings file is called" in result.stderr
+    assert "warden.project.toml" in result.stderr
+
+
+def test_the_new_name_wins_when_both_are_there(project: Path):
+    Path("warden.project.toml").write_text(
+        '[project]\nname = "newer"\n\n[services.api]\nkind = "backend"\n', encoding="utf-8"
+    )
+    done = applied()
+    assert done["project"] == "newer"
+
+
+def test_neither_name_present_asks_for_the_new_one(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    result = runner_cli.invoke(app, ["apply"])
+    assert result.exit_code == 1
+    assert "no warden.project.toml here" in result.stderr
