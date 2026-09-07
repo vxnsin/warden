@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -27,6 +28,8 @@ from warden.errors import WardenError
 from warden.firewall import adopt, catalogue, guard, link
 from warden.firewall import model as firewall
 from warden.firewall.backends import base
+from warden.fleet import aggregate
+from warden.models import Unreachable
 
 ORDER = 50
 
@@ -80,6 +83,50 @@ def _rules_table(rules: list[firewall.Rule]) -> Table:
     return table
 
 
+def _fleet_rules_table(rules: list[dict[str, object]]) -> Table:
+    """The same rules with the node they are on, and no model in between.
+
+    A hub lists a fleet that may be running a newer warden than itself, so a
+    rule is shown as it arrived rather than parsed into a shape this version
+    happens to know.
+    """
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "NAME", "DIR", "ACTION", "WHAT", "FROM", "ORIGIN", "UNTIL"):
+        table.add_column(column)
+    for rule in rules:
+        action = str(rule.get("action", ""))
+        origin = str(rule.get("origin", ""))
+        table.add_row(
+            Text(str(rule.get("node", "")), style=theme.AMETHYST),
+            str(rule.get("name", "")),
+            str(rule.get("direction", "")),
+            Text(action, style=ACTION_STYLES.get(action, "")),
+            _spelled(rule),
+            str(rule.get("source", "")),
+            Text(origin, style=RULE_ORIGINS.get(origin, "")),
+            _until(rule.get("expires_at")),
+        )
+    return table
+
+
+def _spelled(rule: dict[str, object]) -> str:
+    """What a rule is about, from the fields rather than from a model."""
+    return catalogue.describe(str(rule.get("protocol", "")), rule.get("ports") or [])
+
+
+def _until(said: object) -> Text:
+    if not said:
+        return Text("-", style=theme.BONE_DIM)
+    with suppress(ValueError):
+        return Text(theme.until(datetime.fromisoformat(str(said))), style=theme.SHRIEKER)
+    return Text(str(said))
+
+
+def _missing(unreachable: list[Unreachable]) -> None:
+    for node in unreachable:
+        errors.print(f"{node.node} ({node.url}) {node.reason}", style=theme.SHRIEKER)
+
+
 def _tidy(url: str | None = None, token: str | None = None) -> list[str]:
     """Close every rule whose service is gone, before anything reads them.
 
@@ -103,8 +150,12 @@ def _tidy(url: str | None = None, token: str | None = None) -> list[str]:
     return stale
 
 
-def _asking(url: str, token: str | None, ask):
-    """Put a question to another warden, and fail the way every command does."""
+def _asking(url: str | None, token: str | None, ask):
+    """Put a question to a warden, and fail the way every command does.
+
+    No address means the one this machine is configured to talk to, which for
+    a fleet question is the hub.
+    """
     try:
         with shared._client(url, token) as client:
             return ask(client)
@@ -122,17 +173,26 @@ def firewall_list(
     origin: Annotated[
         str | None, typer.Option(help="Only rules that came from here.")
     ] = None,
+    every: Annotated[
+        bool, typer.Option("--all", help="Every warden in the fleet, not just this one.")
+    ] = False,
     on: Annotated[
         str | None, typer.Option("--on", help="Ask the warden at this address instead.")
     ] = None,
+    url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
     """Every rule this machine holds, and where each one came from.
 
-    `--on http://host:7010` asks that warden about its own rules, which needs
-    nothing switched on there - reading is what a token already allows.
+    `--all` asks the whole fleet through the hub and names the nodes that did
+    not answer. `--on http://host:7010` asks one warden by address instead.
+    Neither needs anything switched on there - reading is what a token already
+    allows.
     """
+    if every:
+        _list_the_fleet(url, token, origin=origin, as_json=as_json)
+        return
     if on:
         rules = _asking(on, token, lambda client: client.firewall_rules(origin=origin))
     else:
@@ -145,6 +205,21 @@ def firewall_list(
         console.print("no rules yet", style=theme.BONE_DIM)
         return
     console.print(_rules_table(rules))
+
+
+def _list_the_fleet(
+    url: str | None, token: str | None, *, origin: str | None, as_json: bool
+) -> None:
+    """Every rule anywhere, with the node it is on."""
+    found = _asking(url, token, lambda client: client.fleet_firewall_rules(origin=origin))
+    if as_json:
+        _dump(found.model_dump(mode="json"))
+        return
+    if found.rules:
+        console.print(_fleet_rules_table(found.rules))
+    else:
+        console.print("no rules anywhere", style=theme.BONE_DIM)
+    _missing(found.unreachable)
 
 
 def _rule_from(
@@ -253,6 +328,13 @@ def firewall_open(
     source: Annotated[
         str, typer.Option("--from", help="Which network may reach it.")
     ] = "",
+    every: Annotated[
+        bool, typer.Option("--all", help="Every node in the fleet that holds it.")
+    ] = False,
+    at: Annotated[
+        str | None,
+        typer.Option("--node", help="Ask that node in the fleet, through the hub."),
+    ] = None,
     on: Annotated[
         str | None,
         typer.Option("--on", help="Ask the warden at this address to open it there."),
@@ -267,9 +349,22 @@ def firewall_open(
     so the rule inherits both. Nothing is opened by registering: this is a
     person asking, and it is bounded by what the registry may ever open.
 
-    `--on http://host:7010` asks that warden to open it on its own machine,
-    which it will only do if allow_remote_firewall is set there.
+    `--node build-01` goes through the hub to that node; `--on http://host:7010`
+    asks one warden by address. Either way it is the machine being asked that
+    decides, and it will only do it if allow_remote_firewall is set there.
     """
+    if every:
+        _opened_everywhere(url, token, service, source=source, as_json=as_json)
+        return
+    if at:
+        opened = _asking(
+            url, token, lambda client: client.firewall_open_on(at, service, source=source)
+        )
+        if as_json:
+            _dump(opened)
+        else:
+            console.print(_fleet_rules_table([opened]))
+        return
     if on:
         rule = _asking(on, token, lambda client: client.firewall_open(service, source=source))
         if as_json:
@@ -334,8 +429,18 @@ def firewall_dev_mode(
 @firewall_app.command("delete")
 def firewall_delete(
     name: Annotated[str, typer.Argument(help="The rule to remove.")],
+    at: Annotated[
+        str | None,
+        typer.Option("--node", help="Take it out on that node, through the hub."),
+    ] = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
 ) -> None:
     """Take a rule away."""
+    if at:
+        _asking(url, token, lambda client: client.firewall_close_on(at, name))
+        console.print(f"removed {name} on {at}", style=theme.BONE_DIM)
+        return
     if not _rules().delete(name):
         raise _fail(WardenError(f"no rule called {name!r}"))
     console.print(f"removed {name}", style=theme.BONE_DIM)
@@ -389,6 +494,92 @@ def _waiting_line(waiting: guard.Armed) -> None:
     )
 
 
+# What a node did, said the way somebody would say it.
+DONE = {"apply": "applied", "confirm": "confirmed", "restore": "restored"}
+
+
+def _opened_everywhere(
+    url: str | None, token: str | None, service: str, *, source: str, as_json: bool
+) -> None:
+    """One line per node: opened, skipped for not holding it, or refused."""
+    found = _asking(
+        url, token, lambda client: client.firewall_open_everywhere(service, source=source)
+    )
+    if as_json:
+        _dump(found.model_dump(mode="json"))
+        return
+
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "RESULT", "DETAIL"):
+        table.add_column(column, overflow="fold" if column == "DETAIL" else None)
+    for result in found.results:
+        skipped = not result.ok and result.detail.startswith("does not hold")
+        table.add_row(
+            Text(result.node, style=theme.AMETHYST),
+            Text(
+                "opened" if result.ok else ("skipped" if skipped else "refused"),
+                style=theme.MOSS
+                if result.ok
+                else (theme.BONE_DIM if skipped else theme.EMBER),
+            ),
+            result.detail,
+        )
+    console.print(table)
+    console.print()
+    console.print(
+        f"{found.kept} opened, written down and not applied - "
+        "`warden firewall apply --fleet` makes them true",
+        style=theme.BONE_DIM,
+    )
+
+
+def _across_the_fleet(
+    url: str | None,
+    token: str | None,
+    what: str,
+    *,
+    rollback: int | None = None,
+    as_json: bool,
+) -> None:
+    """One line per node, whichever way each of them went."""
+    if what == "apply":
+        found = _asking(url, token, lambda client: client.firewall_apply_fleet(rollback=rollback))
+    elif what == "confirm":
+        found = _asking(url, token, lambda client: client.firewall_confirm_fleet())
+    else:
+        found = _asking(url, token, lambda client: client.firewall_restore_fleet())
+
+    if as_json:
+        _dump(found.model_dump(mode="json"))
+        return
+
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "RESULT", "DETAIL"):
+        table.add_column(column, overflow="fold" if column == "DETAIL" else None)
+    for result in found.results:
+        table.add_row(
+            Text(result.node, style=theme.AMETHYST),
+            Text(
+                DONE[what] if result.ok else "refused",
+                style=theme.MOSS if result.ok else theme.EMBER,
+            ),
+            result.detail,
+        )
+    console.print(table)
+
+    kept = found.kept
+    console.print()
+    console.print(f"{kept} of {len(found.results)} {DONE[what]}", style=theme.BONE_DIM)
+    if what == "apply" and kept:
+        console.print(
+            "`warden firewall confirm --fleet` keeps them; anything not confirmed "
+            "puts itself back",
+            style=theme.SHRIEKER,
+        )
+    if kept < len(found.results):
+        raise typer.Exit(1)
+
+
 @firewall_app.command("apply")
 def firewall_apply(
     rollback: Annotated[
@@ -396,13 +587,33 @@ def firewall_apply(
         typer.Option(help="Seconds to wait for a confirmation. 0 turns it off."),
     ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask first.")] = False,
+    fleet: Annotated[
+        bool, typer.Option("--fleet", help="Every warden in the fleet, each on its own.")
+    ] = False,
+    at: Annotated[
+        str | None, typer.Option("--node", help="One node in the fleet, through the hub.")
+    ] = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
     """Make the rules true on this machine.
 
     A snapshot is taken first and a rollback armed, so a rule that locks you
     out undoes itself rather than needing somebody at the keyboard.
+
+    `--fleet` asks every node to do the same to its own rules, and refuses to
+    do it without a rollback: one wrong rule would otherwise shut every machine
+    at once. `--node build-01` asks exactly one.
     """
+    if fleet:
+        _across_the_fleet(url, token, "apply", rollback=rollback, as_json=as_json)
+        return
+    if at:
+        said = _asking(url, token, lambda client: client.firewall_apply_on(at, rollback=rollback))
+        _dump(said) if as_json else console.print(f"{at}: {aggregate._said('apply', said)}")
+        return
+
     settings = Settings()
     seconds = settings.firewall_rollback if rollback is None else rollback
     policy = firewall.Policy(rules=_rules().list())
@@ -515,8 +726,30 @@ def firewall_adopt(
 
 
 @firewall_app.command("confirm")
-def firewall_confirm() -> None:
-    """Keep what was applied, and call off the rollback."""
+def firewall_confirm(
+    fleet: Annotated[
+        bool, typer.Option("--fleet", help="Every warden in the fleet, each on its own.")
+    ] = False,
+    at: Annotated[
+        str | None, typer.Option("--node", help="One node in the fleet, through the hub.")
+    ] = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Keep what was applied, and call off the rollback.
+
+    `--fleet` keeps it everywhere; any node left unconfirmed still puts itself
+    back when its own window runs out.
+    """
+    if fleet:
+        _across_the_fleet(url, token, "confirm", as_json=as_json)
+        return
+    if at:
+        said = _asking(url, token, lambda client: client.firewall_confirm_on(at))
+        _dump(said) if as_json else console.print(f"{at}: kept", style=theme.MOSS)
+        return
+
     try:
         kept = guard.confirm(_snapshots())
     except WardenError as exc:
@@ -546,15 +779,50 @@ def firewall_restore(
     console.print(f"restored snapshot {which}", style=theme.MOSS)
 
 
+def _status_of_the_fleet(url: str | None, token: str | None, *, as_json: bool) -> None:
+    """One line per node: what it runs, what it holds, what is about to undo itself."""
+    found = _asking(url, token, lambda client: client.fleet_firewall())
+    if as_json:
+        _dump(found.model_dump(mode="json"))
+        return
+
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "BACKEND", "RULES", "REGISTRY", "REMOTE", "ROLLING BACK"):
+        table.add_column(column)
+    for one in found.firewalls:
+        table.add_row(
+            Text(one.node, style=theme.AMETHYST),
+            Text(one.backend, style="" if one.available else theme.BONE_DIM),
+            str(one.rules),
+            str(one.from_registry),
+            Text("yes", style=theme.MOSS) if one.remote else Text("no", style=theme.BONE_DIM),
+            Text(theme.until(one.rollback_at), style=theme.SHRIEKER)
+            if one.rollback_at
+            else Text("-", style=theme.BONE_DIM),
+        )
+    console.print(table)
+    _missing(found.unreachable)
+
+
 @firewall_app.command("status")
 def firewall_status(
+    every: Annotated[
+        bool, typer.Option("--all", help="Every warden in the fleet, not just this one.")
+    ] = False,
     on: Annotated[
         str | None, typer.Option("--on", help="Ask the warden at this address instead.")
     ] = None,
+    url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Whether a rollback is waiting, and what this machine can do."""
+    """Whether a rollback is waiting, and what this machine can do.
+
+    `--all` asks the whole fleet through the hub, one line per node.
+    """
+    if every:
+        _status_of_the_fleet(url, token, as_json=as_json)
+        return
     if on:
         said = _asking(on, token, lambda client: client.firewall())
         if as_json:

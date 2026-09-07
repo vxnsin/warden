@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 from warden.errors import WardenError
 from warden.firewall.model import Protocol
 
@@ -44,3 +46,26 @@ def named(protocol: Protocol, ports: set[int]) -> str | None:
         if its_protocol is protocol and its_ports == ports:
             return name
     return None
+
+
+def describe(protocol: str, ports: object) -> str:
+    """What a rule is about, from fields rather than from a parsed rule.
+
+    A hub lists a fleet that may be running a newer warden than itself, so a
+    protocol this one has not heard of is printed plainly instead of refusing
+    the whole listing.
+    """
+    from warden.firewall.model import spelled
+
+    if not isinstance(ports, list) or not ports:
+        return protocol
+    named = None
+    with suppress(ValueError):
+        named = named_for(protocol, {int(port) for port in ports})
+    written = spelled({int(port) for port in ports})
+    return f"{protocol}/{written} ({named})" if named else f"{protocol}/{written}"
+
+
+def named_for(protocol: str, ports: set[int]) -> str | None:
+    """The catalogue name for a protocol given by its own name."""
+    return named(Protocol(protocol), ports)

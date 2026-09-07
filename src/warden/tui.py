@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import ClassVar
 
@@ -15,20 +16,38 @@ from textual.widgets import Button, DataTable, Label, Static
 from warden import theme
 from warden.client import WardenClient
 from warden.errors import WardenError
+from warden.firewall import catalogue
 from warden.models import FleetPool, Listener, PoolStatus, Registration, Unreachable
 from warden.ports.listeners import listeners
 from warden.ports.listeners import stop as stop_here
 
 SERVICES = "services"
 PORTS = "ports"
+RULES = "rules"
+
+# `tab` steps through them in this order and comes back round.
+VIEWS = (SERVICES, PORTS, RULES)
 
 COLUMNS = {
     SERVICES: ("#", "SERVICE", "KIND", "PROJECT", "ADDRESS", "PID", "LEASE", "SEEN"),
     PORTS: ("#", "PORT", "PROTO", "PROCESS", "PID", "USER", "ADDRESS", "WARDEN"),
+    RULES: ("#", "RULE", "DIR", "ACTION", "WHAT", "FROM", "ORIGIN", "UNTIL"),
 }
-HEADINGS = {SERVICES: "REGISTERED SERVICES", PORTS: "LISTENING PORTS"}
+HEADINGS = {
+    SERVICES: "REGISTERED SERVICES",
+    PORTS: "LISTENING PORTS",
+    RULES: "FIREWALL RULES",
+}
 
 SEP = "  ~  "
+
+# What `d` does in each view. Nothing, where a rule is not something to take
+# away from under a cursor: closing one is `warden firewall delete`, and it is
+# a decision with a ruleset behind it rather than a keypress.
+ACTS = {SERVICES: "release", PORTS: "stop", RULES: "-"}
+
+# The same colours the command line gives them.
+RULE_ACTIONS = {"allow": theme.MOSS, "deny": theme.EMBER, "reject": theme.SHRIEKER}
 
 # Below this height the banner would leave the table without room to show anything.
 BANNER_MIN_HEIGHT = 30
@@ -131,6 +150,22 @@ def _dim(value: object) -> Text:
     return Text(str(value) if value else "-", style=theme.BONE_DIM)
 
 
+def _node_name(row: object) -> str:
+    """Which warden a row is from, whether it arrived as a model or as fields."""
+    if isinstance(row, Mapping):
+        return str(row.get("node", "") or "")
+    return str(getattr(row, "node", "") or "")
+
+
+def _expires(said: object) -> Text:
+    """When a rule closes itself, in the time left rather than a timestamp."""
+    if not said:
+        return Text("-", style=theme.BONE_DIM)
+    with suppress(ValueError):
+        return Text(theme.until(datetime.fromisoformat(str(said))), style=theme.SHRIEKER)
+    return Text(str(said))
+
+
 def _hints(*pairs: tuple[str, str]) -> Text:
     text = Text()
     for index, (keys, action) in enumerate(pairs):
@@ -195,6 +230,9 @@ class WardenApp(App[None]):
         self.only: str | None = None
         self._services: list[Registration] = []
         self._listeners: list[Listener] = []
+        # Left as they arrived rather than parsed: a hub shows a fleet that may
+        # be running a newer warden than itself.
+        self._rules: list[dict[str, object]] = []
         # Not _nodes: that name belongs to Textual, for the widgets on screen.
         self._node_names: list[str] = []
         self._unreachable: list[Unreachable] = []
@@ -246,9 +284,9 @@ class WardenApp(App[None]):
         self.query_one("#section", Static).update(self._heading())
         hints = [
             ("up/down/j/k", "move"),
-            ("tab", "ports" if self.view == SERVICES else "services"),
+            ("tab", VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]),
             ("r", "reload"),
-            ("d", "release" if self.view == SERVICES else "stop"),
+            ("d", ACTS[self.view]),
             ("q", "quit"),
         ]
         if self.fleet:
@@ -256,9 +294,10 @@ class WardenApp(App[None]):
         self.query_one("#hints", Static).update(_hints(*hints))
 
     def action_switch(self) -> None:
-        self.view = PORTS if self.view == SERVICES else SERVICES
+        self.view = VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]
         self._services = []
         self._listeners = []
+        self._rules = []
         self._lay_out()
         self.action_refresh()
 
@@ -351,8 +390,10 @@ class WardenApp(App[None]):
         try:
             if self.view == SERVICES:
                 self._load_services()
-            else:
+            elif self.view == PORTS:
                 self._load_ports()
+            else:
+                self._load_rules()
         except WardenError as exc:
             self.call_from_thread(self.show_error, str(exc))
 
@@ -388,13 +429,13 @@ class WardenApp(App[None]):
         self._unreachable = list(unreachable)
         if not self.fleet:
             return
-        seen = {getattr(row, "node", "") for row in rows} | {u.node for u in unreachable}
+        seen = {_node_name(row) for row in rows} | {u.node for u in unreachable}
         self._node_names = sorted(name for name in seen if name)
 
     def _showing(self, rows: list) -> list:
         if not self.only:
             return rows
-        return [row for row in rows if getattr(row, "node", None) == self.only]
+        return [row for row in rows if _node_name(row) == self.only]
 
     def _cells(self, index: int, node: str, *rest: object) -> tuple[object, ...]:
         head = (_dim(index), node) if self.fleet else (_dim(index),)
@@ -519,6 +560,56 @@ class WardenApp(App[None]):
         if hidden:
             stats.append(SEP, style=theme.VEIN_BRIGHT)
             stats.append(f"{hidden} owned by another user", style=theme.SHRIEKER)
+        self._say(self._missing(stats))
+
+    def _load_rules(self) -> None:
+        if not self.fleet:
+            found = self.client.firewall_rules()
+            self.call_from_thread(
+                self.show_rules, [rule.model_dump(mode="json") for rule in found]
+            )
+            return
+        found = self.client.fleet_firewall_rules()
+        self.call_from_thread(self.show_rules, found.rules, found.unreachable)
+
+    def show_rules(
+        self, rows: list[dict[str, object]], unreachable: list[Unreachable] = ()
+    ) -> None:
+        self._remember(rows, unreachable)
+        rows = self._showing(rows)
+        self._label()
+        table = self.query_one(DataTable)
+        row = table.cursor_row
+        table.clear()
+        self._rules = rows
+        for index, rule in enumerate(rows, start=1):
+            action = str(rule.get("action", ""))
+            table.add_row(
+                *self._cells(
+                    index,
+                    _node_name(rule),
+                    Text(str(rule.get("name", "")), style=theme.GLOW),
+                    _dim(rule.get("direction", "")),
+                    Text(action, style=RULE_ACTIONS.get(action, "")),
+                    catalogue.describe(str(rule.get("protocol", "")), rule.get("ports") or []),
+                    _dim(rule.get("source", "")),
+                    _dim(rule.get("origin", "")),
+                    _expires(rule.get("expires_at")),
+                )
+            )
+        self._restore_cursor(table, row, len(rows))
+
+        borrowed = sum(1 for rule in rows if str(rule.get("origin")) == "registry")
+        leased = sum(1 for rule in rows if rule.get("expires_at"))
+        stats = Text()
+        stats.append(f"{len(rows)} written down", style=theme.BONE_DIM)
+        if borrowed:
+            stats.append(SEP, style=theme.VEIN_BRIGHT)
+            stats.append(str(borrowed), style=theme.GLOW)
+            stats.append(" opened for a registered service", style=theme.BONE_DIM)
+        if leased:
+            stats.append(SEP, style=theme.VEIN_BRIGHT)
+            stats.append(f"{leased} closing on their own", style=theme.SHRIEKER)
         self._say(self._missing(stats))
 
     def _say(self, message: Text | str) -> None:

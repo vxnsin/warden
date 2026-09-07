@@ -305,6 +305,55 @@ class OpenRequest(BaseModel):
     comment: Plain | None = None
 
 
+class NodeFirewall(FirewallStatus):
+    """One node's firewall, and whose it is."""
+
+    node: str
+
+
+class FleetFirewall(BaseModel):
+    """Every node's firewall, and the ones that did not answer.
+
+    Nothing is summed. Two nodes with a rule apiece do not have two rules
+    between them in any sense that matters - each machine decides for itself
+    what may cross it.
+    """
+
+    firewalls: list[NodeFirewall]
+    unreachable: list[Unreachable]
+
+
+class FleetRules(BaseModel):
+    """Every rule anywhere in the fleet, and where it was not possible to look.
+
+    The rules are typed loosely on purpose: what a node sends back is its own
+    rule, and a hub that insisted on parsing it would refuse to show a fleet
+    running a newer warden than itself.
+    """
+
+    rules: list[dict[str, object]]
+    unreachable: list[Unreachable]
+
+
+class FirewallResult(BaseModel):
+    """What happened when one node was asked to do something to its firewall."""
+
+    node: str
+    url: str
+    ok: bool
+    detail: str
+
+
+class FleetFirewallResult(BaseModel):
+    """One line per node, whichever way it went."""
+
+    results: list[FirewallResult]
+
+    @property
+    def kept(self) -> int:
+        return sum(1 for result in self.results if result.ok)
+
+
 class UpdateStatus(BaseModel):
     """Whether a newer warden exists, or why that is not known."""
 

@@ -20,9 +20,12 @@ from warden.firewall.model import Rule
 from warden.models import (
     Event,
     FirewallStatus,
+    FleetFirewall,
+    FleetFirewallResult,
     FleetListeners,
     FleetPool,
     FleetRegistration,
+    FleetRules,
     FleetServices,
     FleetUpdate,
     Health,
@@ -333,6 +336,86 @@ class WardenClient:
         """Put a snapshot back, whether or not one was waiting."""
         params = {"snapshot": snapshot} if snapshot is not None else None
         return int(self._request("POST", "/v1/firewall/restore", params=params)["restored"])
+
+    def fleet_firewall(self) -> FleetFirewall:
+        """Every node's firewall at once, and the ones that did not answer."""
+        return FleetFirewall.model_validate(self._request("GET", "/v1/fleet/firewall"))
+
+    def fleet_firewall_rules(self, *, origin: str | None = None) -> FleetRules:
+        """Every rule anywhere in the fleet, each carrying the node it is on."""
+        params = {"origin": origin} if origin else None
+        return FleetRules.model_validate(
+            self._request("GET", "/v1/fleet/firewall/rules", params=params)
+        )
+
+    def firewall_open_on(
+        self, node: str, service: str, *, source: str = "", comment: str | None = None
+    ) -> dict[str, object]:
+        """Ask one node in the fleet to open a service of its own.
+
+        The port and the lease are that node's answer, and the bounds are
+        checked there. Needs `allow_remote_firewall` on the node, not the hub.
+        """
+        body = {"service": service, "source": source, "comment": comment}
+        return dict(self._request("POST", f"/v1/fleet/firewall/{node}/open", json=body))
+
+    def firewall_close_on(self, node: str, name: str) -> None:
+        """Take one rule back out on one node."""
+        self._request("DELETE", f"/v1/fleet/firewall/{node}/rules/{name}")
+
+    def firewall_apply_on(self, node: str, *, rollback: int | None = None) -> dict[str, object]:
+        """Make one node's rules true, with its own rollback armed."""
+        params = {"rollback": rollback} if rollback is not None else None
+        return dict(self._request("POST", f"/v1/fleet/firewall/{node}/apply", params=params))
+
+    def firewall_confirm_on(self, node: str) -> dict[str, object]:
+        """Keep what one node applied."""
+        return dict(self._request("POST", f"/v1/fleet/firewall/{node}/confirm"))
+
+    def firewall_restore_on(
+        self, node: str, snapshot: int | None = None
+    ) -> dict[str, object]:
+        """Put a snapshot back on one node."""
+        params = {"snapshot": snapshot} if snapshot is not None else None
+        return dict(self._request("POST", f"/v1/fleet/firewall/{node}/restore", params=params))
+
+    def firewall_open_everywhere(
+        self, service: str, *, source: str = "", comment: str | None = None
+    ) -> FleetFirewallResult:
+        """Open a service on every node in the fleet that holds it.
+
+        A name is a different port on every machine. Nodes that never
+        registered it are named as skipped rather than counted as failures.
+        """
+        body = {"service": service, "source": source, "comment": comment}
+        return FleetFirewallResult.model_validate(
+            self._request("POST", "/v1/fleet/firewall/open", json=body, timeout=60.0)
+        )
+
+    def firewall_apply_fleet(self, *, rollback: int | None = None) -> FleetFirewallResult:
+        """Make every node's rules true, each with its own rollback armed.
+
+        A fleet-wide apply keeps its window: pass `rollback=0` and it is
+        refused. Nothing is kept until `firewall_confirm_fleet`, and a node
+        that is never confirmed puts itself back on its own.
+        """
+        params = {"rollback": rollback} if rollback is not None else None
+        return FleetFirewallResult.model_validate(
+            self._request("POST", "/v1/fleet/firewall/apply", params=params, timeout=60.0)
+        )
+
+    def firewall_confirm_fleet(self) -> FleetFirewallResult:
+        """Keep what every node applied."""
+        return FleetFirewallResult.model_validate(
+            self._request("POST", "/v1/fleet/firewall/confirm", timeout=60.0)
+        )
+
+    def firewall_restore_fleet(self, snapshot: int | None = None) -> FleetFirewallResult:
+        """Put every node back to a snapshot, whether or not one was waiting."""
+        params = {"snapshot": snapshot} if snapshot is not None else None
+        return FleetFirewallResult.model_validate(
+            self._request("POST", "/v1/fleet/firewall/restore", params=params, timeout=60.0)
+        )
 
     def update_status(self) -> UpdateStatus:
         """Whether the warden you are talking to knows of a newer one."""

@@ -6,11 +6,13 @@ from textual.widgets import DataTable, Static
 
 from warden import theme
 from warden.errors import WardenError
+from warden.firewall.model import Rule
 from warden.models import (
     FleetListener,
     FleetListeners,
     FleetPool,
     FleetRegistration,
+    FleetRules,
     FleetServices,
     Listener,
     NodePool,
@@ -22,6 +24,7 @@ from warden.tui import (
     BANNER_MIN_HEIGHT,
     COLUMNS,
     PORTS,
+    RULES,
     SERVICES,
     WardenApp,
     _address,
@@ -71,6 +74,9 @@ class StubClient:
         return POOL
 
     def listeners(self, **_kwargs) -> list[Listener]:
+        return []
+
+    def firewall_rules(self, **_kwargs) -> list[Rule]:
         return []
 
 
@@ -234,13 +240,16 @@ def test_the_banner_gives_way_to_the_table_on_a_short_terminal():
     run_app(scenario, size=(120, BANNER_MIN_HEIGHT - 1))
 
 
-def test_tab_switches_between_the_two_views():
+def test_tab_steps_through_the_views_and_comes_back_round():
     async def scenario(app: WardenApp, pilot) -> None:
         assert app.view == SERVICES
         assert str(app.query_one("#section", Static).content) == "REGISTERED SERVICES"
         await pilot.press("tab")
         assert app.view == PORTS
         assert str(app.query_one("#section", Static).content) == "LISTENING PORTS"
+        await pilot.press("tab")
+        assert app.view == RULES
+        assert str(app.query_one("#section", Static).content) == "FIREWALL RULES"
         await pilot.press("tab")
         assert app.view == SERVICES
 
@@ -463,3 +472,91 @@ def test_the_warden_it_talks_to_is_named_when_there_is_one():
         assert StubClient.url in str(app.query_one("#tagline", Static).content)
 
     run_app(scenario)
+
+
+A_RULE = {
+    "name": "allow-shop-api",
+    "direction": "in",
+    "action": "allow",
+    "protocol": "tcp",
+    "ports": [8000],
+    "source": "10.0.0.0/8",
+    "origin": "registry",
+    "expires_at": None,
+}
+
+
+class RuledClient(StubClient):
+    """A warden with one rule of its own."""
+
+    def firewall_rules(self, **_kwargs) -> list[Rule]:
+        return [Rule.model_validate({**A_RULE, "service": "shop-api"})]
+
+
+def test_the_rules_view_shows_what_is_written_down():
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("tab")
+        await pilot.press("tab")
+        await pilot.pause()
+        table = app.query_one(DataTable)
+        assert app.view == RULES
+        assert [str(column.label) for column in table.columns.values()] == list(COLUMNS[RULES])
+        assert table.row_count == 1
+        assert "opened for a registered service" in str(
+            app.query_one("#stats", Static).content
+        )
+
+    run_app(scenario, client=RuledClient())
+
+
+def test_a_rule_from_a_newer_warden_is_shown_rather_than_refused():
+    """A hub lists a fleet that may be running something it has not heard of."""
+
+    class Newer(FleetStubClient):
+        def fleet_firewall_rules(self, **_kwargs) -> FleetRules:
+            return FleetRules(
+                rules=[
+                    {
+                        **A_RULE,
+                        "node": "build-01",
+                        "protocol": "sctp",
+                        "something_new": True,
+                    }
+                ],
+                unreachable=[
+                    Unreachable(node="db-03", url="http://db-03:7010", reason="gone")
+                ],
+            )
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("tab")
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.query_one(DataTable).row_count == 1
+        assert "db-03 not answering" in str(app.query_one("#stats", Static).content)
+
+    run_app(scenario, client=Newer(), fleet=True)
+
+
+def test_the_rules_view_can_be_filtered_to_one_node():
+    class Two(FleetStubClient):
+        def fleet_firewall_rules(self, **_kwargs) -> FleetRules:
+            return FleetRules(
+                rules=[
+                    {**A_RULE, "node": "build-01"},
+                    {**A_RULE, "node": "web-02", "name": "allow-ssh"},
+                ],
+                unreachable=[],
+            )
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("tab")
+        await pilot.press("tab")
+        await pilot.pause()
+        assert app.query_one(DataTable).row_count == 2
+        await pilot.press("n")
+        await pilot.pause()
+        assert app.only == "build-01"
+        assert app.query_one(DataTable).row_count == 1
+
+    run_app(scenario, client=Two(), fleet=True)
