@@ -245,7 +245,30 @@ def _firewall(settings: Settings) -> list[Check]:
         checks.append(
             Check(NOTE, f"{_many(len(theirs), 'rule')} opened for a registered service")
         )
+    checks.extend(_closing_on_their_own(rules))
     return checks
+
+
+def _closing_on_their_own(rules: list) -> list[Check]:
+    """Rules with a clock, and how long each of them has left.
+
+    Worth knowing before one closes rather than after. A rule that goes on its
+    own is the point of giving it a clock, and also the thing somebody forgets
+    they did.
+    """
+    from warden.firewall.link import DEV_MODE
+
+    timed = sorted(
+        (rule for rule in rules if rule.expires_at and rule.service != DEV_MODE),
+        key=lambda rule: rule.expires_at,
+    )
+    if not timed:
+        return []
+    soonest = timed[0]
+    said = f"{_many(len(timed), 'rule')} closing on their own"
+    return [
+        Check(NOTE, f"{said}, the first of them in {theme.until(soonest.expires_at)}")
+    ]
 
 
 # After this long, a rule nobody applied stops being something in progress and

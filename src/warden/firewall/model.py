@@ -72,6 +72,22 @@ Limit = Annotated[
 SPANS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
 
 
+# How long something lasts: a number and a unit. `2h`, `30m`, `90s`, `1d`.
+SPAN = re.compile(r"^([1-9][0-9]{0,6})(s|m|h|d)$")
+
+LASTS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def span(said: str) -> int:
+    """`2h` as seconds. Raises rather than guessing at anything else."""
+    found = SPAN.match(said.strip())
+    if found is None:
+        raise ValueError(
+            f"{said!r} is not a length of time - it looks like 30s, 15m, 2h or 1d"
+        )
+    return int(found[1]) * LASTS[found[2]]
+
+
 def per_second(limit: str) -> tuple[int, int]:
     """A limit as a count and the seconds it is counted over."""
     said = LIMIT.match(limit)

@@ -208,6 +208,9 @@ A rule can carry a rate — `--limit 6/minute` — which nftables, iptables and 
 all render, and which Windows refuses by name rather than quietly applying
 without it.
 
+A rule can also carry a clock — `--for 2h` — and closes itself when the time is
+up, the same way one bound to a service closes when its lease lapses.
+
 `warden firewall adopt` takes over from ufw or firewalld: it reads their rules,
 shows them, applies them as its own, and turns the other one off only once you
 confirm. Until then it is still enabled, so rolling back returns the machine

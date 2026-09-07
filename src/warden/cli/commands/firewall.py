@@ -246,6 +246,7 @@ def _rule_from(
     protocol: str | None,
     comment: str | None,
     limit: str | None = None,
+    lasts: str | None = None,
 ) -> firewall.Rule:
     """A port, a port range, or a name out of the catalogue."""
     return catalogue.rule_for(
@@ -256,6 +257,7 @@ def _rule_from(
         protocol=protocol,
         comment=comment,
         limit=limit,
+        for_seconds=firewall.span(lasts) if lasts else None,
     )
 
 
@@ -284,9 +286,17 @@ def firewall_allow(
         str | None,
         typer.Option(help="How often it may happen: 10/second, 6/minute."),
     ] = None,
+    lasts: Annotated[
+        str | None,
+        typer.Option("--for", help="How long it stays: 30s, 15m, 2h, 1d."),
+    ] = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Let something through."""
+    """Let something through.
+
+    `--for 2h` gives it a clock. It closes itself when the time is up, the same
+    way a rule that borrowed a service's lease closes when the lease lapses.
+    """
     try:
         rule = _rule_from(
             what,
@@ -296,6 +306,7 @@ def firewall_allow(
             protocol=protocol,
             comment=comment,
             limit=limit,
+            lasts=lasts,
         )
     except (WardenError, ValueError) as exc:
         raise _fail(WardenError(str(getattr(exc, "message", exc)))) from exc
@@ -315,6 +326,10 @@ def firewall_deny(
         str | None,
         typer.Option(help="How often it may happen: 10/second, 6/minute."),
     ] = None,
+    lasts: Annotated[
+        str | None,
+        typer.Option("--for", help="How long it stays: 30s, 15m, 2h, 1d."),
+    ] = None,
     reject: Annotated[
         bool, typer.Option("--reject", help="Answer instead of saying nothing.")
     ] = False,
@@ -330,6 +345,7 @@ def firewall_deny(
             protocol=protocol,
             comment=comment,
             limit=limit,
+            lasts=lasts,
         )
     except (WardenError, ValueError) as exc:
         raise _fail(WardenError(str(getattr(exc, "message", exc)))) from exc
