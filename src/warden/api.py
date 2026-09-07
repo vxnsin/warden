@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -1056,7 +1057,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         dependencies=[Depends(known_caller)],
         response_class=PlainTextResponse,
     )
-    def prometheus(manager: Manager, fleet: FleetDep) -> Response:
+    def prometheus(
+        manager: Manager, fleet: FleetDep, rules: Rules, snapshots: SnapshotsDep
+    ) -> Response:
         """Behind the same token as every other read.
 
         Left open on a warden bound to 0.0.0.0 this would hand out the shape of
@@ -1070,8 +1073,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 version=__version__,
                 node=settings.node,
                 role=settings.role,
+                walls=_walls(rules, snapshots),
             ),
             media_type=metrics.CONTENT_TYPE,
+        )
+
+    def _walls(rules: Rules, snapshots: SnapshotsDep) -> metrics.Walls:
+        """The firewall's numbers, all of them out of the store."""
+        held = rules.list()
+        counted = snapshots.tallies()
+        return metrics.Walls(
+            by_origin=dict(Counter(str(rule.origin) for rule in held)),
+            live=len(firewall.Policy(rules=held).live(datetime.now(UTC))),
+            pending=guard.pending(held, snapshots).count,
+            rollback_armed=guard.armed(snapshots) is not None,
+            applied=counted.get(guard.APPLIED, 0),
+            rolled_back=counted.get(guard.ROLLED_BACK, 0),
         )
 
     @app.get("/health", summary="Liveness probe", tags=["meta"])
