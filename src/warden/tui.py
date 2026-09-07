@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import ClassVar
 
@@ -10,25 +11,40 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Label, Static
+from textual.widgets import Button, DataTable, Label, Static, Tab, Tabs
 
 from warden import theme
 from warden.client import WardenClient
 from warden.errors import WardenError
+from warden.firewall import catalogue
 from warden.models import FleetPool, Listener, PoolStatus, Registration, Unreachable
 from warden.ports.listeners import listeners
 from warden.ports.listeners import stop as stop_here
 
 SERVICES = "services"
 PORTS = "ports"
+RULES = "rules"
+
+# `tab` steps through them in this order and comes back round.
+VIEWS = (SERVICES, PORTS, RULES)
 
 COLUMNS = {
     SERVICES: ("#", "SERVICE", "KIND", "PROJECT", "ADDRESS", "PID", "LEASE", "SEEN"),
     PORTS: ("#", "PORT", "PROTO", "PROCESS", "PID", "USER", "ADDRESS", "WARDEN"),
+    RULES: ("#", "RULE", "DIR", "ACTION", "WHAT", "FROM", "ORIGIN", "UNTIL"),
 }
-HEADINGS = {SERVICES: "REGISTERED SERVICES", PORTS: "LISTENING PORTS"}
+# What the tab bar calls each view. The bar is the heading.
+TABS = {SERVICES: "Services", PORTS: "Ports", RULES: "Firewall"}
 
 SEP = "  ~  "
+
+# What `d` does in each view. Nothing, where a rule is not something to take
+# away from under a cursor: closing one is `warden firewall delete`, and it is
+# a decision with a ruleset behind it rather than a keypress.
+ACTS = {SERVICES: "release", PORTS: "stop", RULES: ""}
+
+# The same colours the command line gives them.
+RULE_ACTIONS = {"allow": theme.MOSS, "deny": theme.EMBER, "reject": theme.SHRIEKER}
 
 # Below this height the banner would leave the table without room to show anything.
 BANNER_MIN_HEIGHT = 30
@@ -74,6 +90,14 @@ Screen {
     text-style: bold;
     height: auto;
 }
+
+/* The same bar the setup screen has, so the two screens look like one program. */
+Tabs { background: $sculk; height: 2; }
+Tabs > #tabs-scroll { height: 2; }
+Tabs > #tabs-list { min-height: 1; }
+Tab { color: $dim; padding: 0 2; }
+Tab.-active { color: $glow; text-style: bold; }
+Underline > .underline--bar { color: $glow_dim; background: $vein; }
 
 DataTable {
     height: 1fr;
@@ -131,6 +155,22 @@ def _dim(value: object) -> Text:
     return Text(str(value) if value else "-", style=theme.BONE_DIM)
 
 
+def _node_name(row: object) -> str:
+    """Which warden a row is from, whether it arrived as a model or as fields."""
+    if isinstance(row, Mapping):
+        return str(row.get("node", "") or "")
+    return str(getattr(row, "node", "") or "")
+
+
+def _expires(said: object) -> Text:
+    """When a rule closes itself, in the time left rather than a timestamp."""
+    if not said:
+        return Text("-", style=theme.BONE_DIM)
+    with suppress(ValueError):
+        return Text(theme.until(datetime.fromisoformat(str(said))), style=theme.SHRIEKER)
+    return Text(str(said))
+
+
 def _hints(*pairs: tuple[str, str]) -> Text:
     text = Text()
     for index, (keys, action) in enumerate(pairs):
@@ -176,6 +216,8 @@ class WardenApp(App[None]):
         # Textual gives tab to focus movement by default; there is only one
         # focusable widget here, so the view switch is the better use for it.
         Binding("tab", "switch", "Switch view", priority=True),
+        Binding("ctrl+right", "switch", "Next view", show=False, priority=True),
+        Binding("ctrl+left", "back", "Previous view", show=False, priority=True),
         Binding("n", "node", "Filter by node"),
         Binding("r", "refresh", "Reload"),
         Binding("d", "act", "Release/stop"),
@@ -195,6 +237,9 @@ class WardenApp(App[None]):
         self.only: str | None = None
         self._services: list[Registration] = []
         self._listeners: list[Listener] = []
+        # Left as they arrived rather than parsed: a hub shows a fleet that may
+        # be running a newer warden than itself.
+        self._rules: list[dict[str, object]] = []
         # Not _nodes: that name belongs to Textual, for the widgets on screen.
         self._node_names: list[str] = []
         self._unreachable: list[Unreachable] = []
@@ -207,7 +252,8 @@ class WardenApp(App[None]):
         with Vertical(id="shell"):
             yield Static(theme.banner_text(), id="banner")
             yield Static("", id="tagline")
-            yield Static(HEADINGS[SERVICES], id="section")
+            yield Tabs(*(Tab(TABS[view], id=f"view-{view}") for view in VIEWS), id="views")
+            yield Static("", id="section")
             yield DataTable(id="rows", cursor_type="row")
             yield Static("", id="stats")
             yield Static("", id="hints")
@@ -227,9 +273,12 @@ class WardenApp(App[None]):
         return (first, "NODE", *rest) if self.fleet else (first, *rest)
 
     def _heading(self) -> str:
-        if not self.fleet:
-            return HEADINGS[self.view]
-        return f"{HEADINGS[self.view]}{SEP}{(self.only or 'fleet').upper()}"
+        """What the tab bar does not already say: whose machines these are.
+
+        The bar names the view, so repeating it underneath would be the same
+        word twice with nothing between them.
+        """
+        return (self.only or "fleet").upper() if self.fleet else ""
 
     def _lay_out(self) -> None:
         table = self.query_one(DataTable)
@@ -243,22 +292,42 @@ class WardenApp(App[None]):
         said = Text(f"{theme.TAGLINE}{SEP}{source}{SEP}", style=theme.BONE_DIM)
         said.append_text(theme.byline())
         self.query_one("#tagline", Static).update(said)
-        self.query_one("#section", Static).update(self._heading())
+        heading = self._heading()
+        section = self.query_one("#section", Static)
+        section.update(heading)
+        # An empty heading is a blank row rather than nothing, and on a small
+        # terminal that row is a row of the table.
+        section.display = bool(heading)
         hints = [
             ("up/down/j/k", "move"),
-            ("tab", "ports" if self.view == SERVICES else "services"),
+            ("tab", VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]),
             ("r", "reload"),
-            ("d", "release" if self.view == SERVICES else "stop"),
             ("q", "quit"),
         ]
+        if ACTS[self.view]:
+            hints.insert(3, ("d", ACTS[self.view]))
         if self.fleet:
             hints.insert(2, ("n", self.only or "every node"))
         self.query_one("#hints", Static).update(_hints(*hints))
 
     def action_switch(self) -> None:
-        self.view = PORTS if self.view == SERVICES else SERVICES
+        self._step(1)
+
+    def action_back(self) -> None:
+        self._step(-1)
+
+    def _step(self, by: int) -> None:
+        """The bar is what holds the view; moving it is what changes it."""
+        self.query_one(Tabs).active = f"view-{VIEWS[(VIEWS.index(self.view) + by) % len(VIEWS)]}"
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        chosen = str(event.tab.id).removeprefix("view-")
+        if chosen == self.view:
+            return
+        self.view = chosen
         self._services = []
         self._listeners = []
+        self._rules = []
         self._lay_out()
         self.action_refresh()
 
@@ -351,8 +420,10 @@ class WardenApp(App[None]):
         try:
             if self.view == SERVICES:
                 self._load_services()
-            else:
+            elif self.view == PORTS:
                 self._load_ports()
+            else:
+                self._load_rules()
         except WardenError as exc:
             self.call_from_thread(self.show_error, str(exc))
 
@@ -388,13 +459,13 @@ class WardenApp(App[None]):
         self._unreachable = list(unreachable)
         if not self.fleet:
             return
-        seen = {getattr(row, "node", "") for row in rows} | {u.node for u in unreachable}
+        seen = {_node_name(row) for row in rows} | {u.node for u in unreachable}
         self._node_names = sorted(name for name in seen if name)
 
     def _showing(self, rows: list) -> list:
         if not self.only:
             return rows
-        return [row for row in rows if getattr(row, "node", None) == self.only]
+        return [row for row in rows if _node_name(row) == self.only]
 
     def _cells(self, index: int, node: str, *rest: object) -> tuple[object, ...]:
         head = (_dim(index), node) if self.fleet else (_dim(index),)
@@ -519,6 +590,56 @@ class WardenApp(App[None]):
         if hidden:
             stats.append(SEP, style=theme.VEIN_BRIGHT)
             stats.append(f"{hidden} owned by another user", style=theme.SHRIEKER)
+        self._say(self._missing(stats))
+
+    def _load_rules(self) -> None:
+        if not self.fleet:
+            found = self.client.firewall_rules()
+            self.call_from_thread(
+                self.show_rules, [rule.model_dump(mode="json") for rule in found]
+            )
+            return
+        found = self.client.fleet_firewall_rules()
+        self.call_from_thread(self.show_rules, found.rules, found.unreachable)
+
+    def show_rules(
+        self, rows: list[dict[str, object]], unreachable: list[Unreachable] = ()
+    ) -> None:
+        self._remember(rows, unreachable)
+        rows = self._showing(rows)
+        self._label()
+        table = self.query_one(DataTable)
+        row = table.cursor_row
+        table.clear()
+        self._rules = rows
+        for index, rule in enumerate(rows, start=1):
+            action = str(rule.get("action", ""))
+            table.add_row(
+                *self._cells(
+                    index,
+                    _node_name(rule),
+                    Text(str(rule.get("name", "")), style=theme.GLOW),
+                    _dim(rule.get("direction", "")),
+                    Text(action, style=RULE_ACTIONS.get(action, "")),
+                    catalogue.describe(str(rule.get("protocol", "")), rule.get("ports") or []),
+                    _dim(rule.get("source", "")),
+                    _dim(rule.get("origin", "")),
+                    _expires(rule.get("expires_at")),
+                )
+            )
+        self._restore_cursor(table, row, len(rows))
+
+        borrowed = sum(1 for rule in rows if str(rule.get("origin")) == "registry")
+        leased = sum(1 for rule in rows if rule.get("expires_at"))
+        stats = Text()
+        stats.append(f"{len(rows)} written down", style=theme.BONE_DIM)
+        if borrowed:
+            stats.append(SEP, style=theme.VEIN_BRIGHT)
+            stats.append(str(borrowed), style=theme.GLOW)
+            stats.append(" opened for a registered service", style=theme.BONE_DIM)
+        if leased:
+            stats.append(SEP, style=theme.VEIN_BRIGHT)
+            stats.append(f"{leased} closing on their own", style=theme.SHRIEKER)
         self._say(self._missing(stats))
 
     def _say(self, message: Text | str) -> None:

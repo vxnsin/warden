@@ -15,14 +15,20 @@ from warden.core.config import insecure
 from warden.errors import NotPermittedError, RelayedError, UnknownNodeError, UnknownServiceError
 from warden.models import (
     Duplicate,
+    FirewallResult,
+    FirewallStatus,
+    FleetFirewall,
+    FleetFirewallResult,
     FleetListener,
     FleetListeners,
     FleetPool,
     FleetRegistration,
+    FleetRules,
     FleetServices,
     FleetUpdate,
     Listener,
     Node,
+    NodeFirewall,
     NodePool,
     PoolStatus,
     Registration,
@@ -240,6 +246,72 @@ async def gather_pools(
     return FleetPool(pools=pools, unreachable=unreachable)
 
 
+async def _firewall_of(
+    http: httpx.AsyncClient, node: Node
+) -> tuple[Node, FirewallStatus | None, str | None]:
+    try:
+        response = await http.get(f"{node.url}/v1/firewall")
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return node, None, reason(exc)
+    return node, FirewallStatus.model_validate(response.json()), None
+
+
+async def gather_firewalls(
+    http: httpx.AsyncClient, nodes: list[Node], *, here: str, local: FirewallStatus
+) -> FleetFirewall:
+    """What every node's firewall is, and which of them is about to undo itself.
+
+    Nothing is added up. Each machine decides for itself what may cross it, so
+    a total would be a number about nothing.
+    """
+    answers = await asyncio.gather(*(_firewall_of(http, node) for node in nodes))
+    answered, unreachable = _apart(answers)
+
+    firewalls = [NodeFirewall(node=here, **local.model_dump())]
+    firewalls.extend(
+        NodeFirewall(node=name, **status.model_dump()) for name, status in answered
+    )
+    firewalls.sort(key=lambda one: one.node)
+    return FleetFirewall(firewalls=firewalls, unreachable=unreachable)
+
+
+async def _rules_of(
+    http: httpx.AsyncClient, node: Node, params: dict[str, str]
+) -> tuple[Node, list[dict[str, object]] | None, str | None]:
+    try:
+        response = await http.get(f"{node.url}/v1/firewall/rules", params=params)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return node, None, reason(exc)
+    return node, list(response.json()), None
+
+
+async def gather_rules(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    *,
+    here: str,
+    local: list[dict[str, object]],
+    origin: str | None = None,
+) -> FleetRules:
+    """Every rule anywhere in the fleet, each carrying the node it is on.
+
+    A rule is passed through as the node sent it rather than parsed, so a hub
+    still lists a fleet running a newer warden than itself instead of refusing
+    the whole answer over one field it has not heard of.
+    """
+    params = {"origin": origin} if origin else {}
+    answers = await asyncio.gather(*(_rules_of(http, node, params) for node in nodes))
+    answered, unreachable = _apart(answers)
+
+    rules = [{**rule, "node": here} for rule in local]
+    for name, theirs in answered:
+        rules.extend({**rule, "node": name} for rule in theirs)
+    rules.sort(key=lambda rule: (str(rule.get("node")), str(rule.get("name"))))
+    return FleetRules(rules=rules, unreachable=unreachable)
+
+
 async def _update_one(http: httpx.AsyncClient, node: Node) -> UpdateResult:
     try:
         response = await http.post(f"{node.url}/v1/update")
@@ -385,3 +457,164 @@ async def stop_on(
         http, nodes, node_name, "DELETE", f"/v1/listeners/{pid}",
         require_https=require_https, params={"force": force},
     )
+
+
+async def open_on(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    node_name: str,
+    payload: dict[str, object],
+    *,
+    require_https: bool = False,
+) -> dict[str, object]:
+    """Ask one node to open the port a service of its own holds.
+
+    The request names a service, never a port. Which port that is, and for how
+    long, is the node's own answer - and the eight bounds it has to pass are
+    checked there rather than here.
+    """
+    response = await _relay(
+        http, nodes, node_name, "POST", "/v1/firewall/open",
+        require_https=require_https, json=payload,
+    )
+    return {**response.json(), "node": node_name}
+
+
+async def close_on(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    node_name: str,
+    rule: str,
+    *,
+    require_https: bool = False,
+) -> None:
+    """Take one rule back out on the node that holds it."""
+    await _relay(
+        http, nodes, node_name, "DELETE", f"/v1/firewall/rules/{rule}",
+        require_https=require_https,
+    )
+
+
+async def firewall_on(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    node_name: str,
+    what: str,
+    *,
+    params: dict[str, object] | None = None,
+    require_https: bool = False,
+) -> dict[str, object]:
+    """`apply`, `confirm` or `restore` on one named node."""
+    response = await _relay(
+        http, nodes, node_name, "POST", f"/v1/firewall/{what}",
+        require_https=require_https, params=params or {},
+    )
+    return dict(response.json())
+
+
+async def _firewall_one(
+    http: httpx.AsyncClient, node: Node, what: str, params: dict[str, object]
+) -> FirewallResult:
+    try:
+        response = await http.post(f"{node.url}/v1/firewall/{what}", params=params)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return FirewallResult(
+            node=node.name, url=node.url, ok=False, detail=detail_of(exc.response)
+        )
+    except httpx.HTTPError as exc:
+        return FirewallResult(node=node.name, url=node.url, ok=False, detail=reason(exc))
+    return FirewallResult(
+        node=node.name, url=node.url, ok=True, detail=_said(what, response.json())
+    )
+
+
+def _said(what: str, answered: dict[str, object]) -> str:
+    """What a node did, in a line that fits a column."""
+    if what == "apply":
+        rules = answered.get("applied", 0)
+        until = answered.get("rollback_at")
+        kept = f", rolling back at {str(until)[11:19]}" if until else ", no rollback armed"
+        return f"{rules} rules{kept}"
+    if what == "confirm":
+        return f"kept snapshot {answered.get('confirmed')}"
+    return f"back to snapshot {answered.get('restored')}"
+
+
+async def firewall_fleet(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    what: str,
+    *,
+    params: dict[str, object] | None = None,
+    here: FirewallResult,
+) -> FleetFirewallResult:
+    """Ask every node to do the same thing to its own firewall.
+
+    Nobody waits for anybody. A node that refuses, or that cannot be reached at
+    all, gets a line of its own and does not stop the rest - and a node that
+    was never reached has already saved itself, because the rollback it armed
+    runs on its own machine.
+    """
+    results = list(
+        await asyncio.gather(
+            *(_firewall_one(http, node, what, params or {}) for node in nodes)
+        )
+    )
+    results.append(here)
+    results.sort(key=lambda result: result.node)
+    return FleetFirewallResult(results=results)
+
+
+async def open_where_held(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    service: str,
+    payload: dict[str, object],
+    *,
+    here: str,
+    holders: set[str],
+    require_https: bool = False,
+) -> FleetFirewallResult:
+    """Open a service on every node that actually holds it.
+
+    A name means a different port on every machine, and nothing on most of
+    them. A node that never registered this service is skipped and said so -
+    it is not a failure, and it is not something to open anything for.
+    """
+    wanted = [node for node in nodes if node.name in holders]
+    results = [
+        FirewallResult(
+            node=node.name, url=node.url, ok=False, detail=f"does not hold {service}"
+        )
+        for node in nodes
+        if node.name not in holders
+    ]
+
+    async def one(node: Node) -> FirewallResult:
+        try:
+            opened = await open_on(
+                http, nodes, node.name, payload, require_https=require_https
+            )
+        except (RelayedError, UnknownNodeError, NotPermittedError) as exc:
+            return FirewallResult(
+                node=node.name, url=node.url, ok=False, detail=str(exc.message)
+            )
+        return FirewallResult(
+            node=node.name, url=node.url, ok=True, detail=_opened(opened)
+        )
+
+    results.extend(await asyncio.gather(*(one(node) for node in wanted)))
+    if here not in holders:
+        results.append(
+            FirewallResult(node=here, url="", ok=False, detail=f"does not hold {service}")
+        )
+    results.sort(key=lambda result: result.node)
+    return FleetFirewallResult(results=results)
+
+
+def _opened(rule: dict[str, object]) -> str:
+    ports = rule.get("ports") or []
+    where = ", ".join(str(port) for port in ports) if isinstance(ports, list) else str(ports)
+    return f"{rule.get('name')} - {where} from {rule.get('source')}"
+

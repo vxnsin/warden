@@ -35,10 +35,14 @@ from warden.fleet.upstream import UpstreamReporter
 from warden.models import (
     ErrorResponse,
     Event,
+    FirewallResult,
     FirewallStatus,
+    FleetFirewall,
+    FleetFirewallResult,
     FleetListeners,
     FleetPool,
     FleetRegistration,
+    FleetRules,
     FleetServices,
     FleetUpdate,
     GroupRequest,
@@ -105,6 +109,10 @@ SnapshotsDep = Annotated[Snapshots, Depends(get_snapshots)]
 # Long enough that a comment down an idle stream is rare, short enough that a
 # proxy in the middle does not decide the connection died.
 KEEPALIVE = 20.0
+
+# What `POST /v1/fleet/firewall/{node}/{what}` will accept, so a typo comes back
+# a 404 with the list in it rather than a relayed request to a made-up path.
+DOABLE = frozenset({"apply", "confirm", "restore"})
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -400,6 +408,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with aggregate.client(settings.cluster_token) as http:
             return await aggregate.lookup_on(http, fleet.nodes(), node, name)
 
+    # Reading is what a token already allows, here as much as on one machine.
+    # `firewall_status` and `firewall_rules` are the same handlers the single
+    # node uses, called for this warden's own answer before anyone is asked.
+    @fleet_view.get("/firewall", summary="Every node's firewall at once")
+    async def fleet_firewall(
+        rules: Rules, snapshots: SnapshotsDep, fleet: FleetDep
+    ) -> FleetFirewall:
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.gather_firewalls(
+                http,
+                fleet.nodes(),
+                here=settings.node,
+                local=firewall_status(rules, snapshots),
+            )
+
+    @fleet_view.get("/firewall/rules", summary="Every rule anywhere in the fleet")
+    async def fleet_firewall_rules(
+        rules: Rules, fleet: FleetDep, origin: str | None = None
+    ) -> FleetRules:
+        mine = [rule.model_dump(mode="json") for rule in rules.list(origin=origin)]
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.gather_rules(
+                http, fleet.nodes(), here=settings.node, local=mine, origin=origin
+            )
+
     # Its own router, guarded like any other change: the cluster token reads and
     # announces, and forwarding a registration through the hub must not become
     # the one way it can write. The caller's own authorization goes with it.
@@ -524,6 +557,234 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @reads.get("/update", summary="Whether a newer warden exists")
     def update_status(request: Request) -> UpdateStatus:
         return request.app.state.updates.status
+
+    # Changing one node's firewall from the hub. The node's own
+    # `allow_remote_firewall` still decides, and its refusal comes back in its
+    # own words - the hub adds nothing to the question and nothing to the answer.
+    @fleet_writes.post(
+        "/firewall/{node}/open",
+        summary="Open a registered service's port on one named node",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def open_there(
+        node: str,
+        asked: OpenRequest,
+        manager: Manager,
+        rules: Rules,
+        fleet: FleetDep,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        if node == settings.node:
+            may_change_the_firewall()
+            return {**firewall_open(asked, manager, rules).model_dump(mode="json"), "node": node}
+        async with aggregate.relaying(authorization) as http:
+            return await aggregate.open_on(
+                http,
+                fleet.nodes(),
+                node,
+                asked.model_dump(mode="json"),
+                require_https=settings.require_https,
+            )
+
+    @fleet_writes.delete(
+        "/firewall/{node}/rules/{name}",
+        summary="Take one rule back out on one named node",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def close_there(
+        node: str,
+        name: str,
+        rules: Rules,
+        fleet: FleetDep,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> Response:
+        if node == settings.node:
+            may_change_the_firewall()
+            return firewall_close(name, rules)
+        async with aggregate.relaying(authorization) as http:
+            await aggregate.close_on(
+                http, fleet.nodes(), node, name, require_https=settings.require_https
+            )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @fleet_writes.post(
+        "/firewall/{node}/{what}",
+        summary="Apply, confirm or restore on one named node",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def firewall_there(
+        node: str,
+        what: str,
+        rules: Rules,
+        snapshots: SnapshotsDep,
+        fleet: FleetDep,
+        rollback: int | None = None,
+        snapshot: int | None = None,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        if what not in DOABLE:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no such thing to do: {what!r}; there is {', '.join(sorted(DOABLE))}",
+            )
+        if node == settings.node:
+            return _here(what, rules, snapshots, rollback=rollback, snapshot=snapshot)
+        params = {
+            key: value
+            for key, value in (("rollback", rollback), ("snapshot", snapshot))
+            if value is not None
+        }
+        async with aggregate.relaying(authorization) as http:
+            return await aggregate.firewall_on(
+                http,
+                fleet.nodes(),
+                node,
+                what,
+                params=params,
+                require_https=settings.require_https,
+            )
+
+    def _here(
+        what: str,
+        rules: Rules,
+        snapshots: SnapshotsDep,
+        *,
+        rollback: int | None,
+        snapshot: int | None,
+    ) -> dict[str, object]:
+        """The same three, on the warden the request arrived at."""
+        may_change_the_firewall()
+        if what == "apply":
+            return firewall_apply(rules, snapshots, rollback)
+        if what == "confirm":
+            return firewall_confirm(snapshots)
+        return firewall_restore(snapshots, snapshot)
+
+
+    @fleet_writes.post(
+        "/firewall/open",
+        summary="Open a service on every node that holds it",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def open_everywhere(
+        asked: OpenRequest,
+        manager: Manager,
+        rules: Rules,
+        fleet: FleetDep,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> FleetFirewallResult:
+        """A name means a different port on every machine, and none on most.
+
+        Which nodes hold it is asked first, so a node that never registered
+        this service is skipped and told so rather than asked for something it
+        has nothing to open for.
+        """
+        nodes = fleet.nodes()
+        async with aggregate.client(settings.cluster_token) as looking:
+            everything = await aggregate.gather_services(
+                looking, nodes, here=settings.node, local=manager.list()
+            )
+        holders = {
+            service.node for service in everything.services if service.name == asked.service
+        }
+        if not holders:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no node in the fleet holds a service called {asked.service!r}",
+            )
+
+        async with aggregate.relaying(authorization) as http:
+            found = await aggregate.open_where_held(
+                http,
+                nodes,
+                asked.service,
+                asked.model_dump(mode="json"),
+                here=settings.node,
+                holders=holders,
+                require_https=settings.require_https,
+            )
+        if settings.node in holders:
+            found.results = [one for one in found.results if one.node != settings.node]
+            found.results.append(_open_here(asked, manager, rules))
+            found.results.sort(key=lambda result: result.node)
+        return found
+
+    def _open_here(asked: OpenRequest, manager: Manager, rules: Rules) -> FirewallResult:
+        """This warden's own answer, through the same door and the same gate."""
+        try:
+            may_change_the_firewall()
+            opened = firewall_open(asked, manager, rules)
+        except WardenError as exc:
+            return FirewallResult(
+                node=settings.node, url=settings.advertise_url, ok=False, detail=exc.message
+            )
+        return FirewallResult(
+            node=settings.node,
+            url=settings.advertise_url,
+            ok=True,
+            detail=aggregate._opened(opened.model_dump(mode="json")),
+        )
+
+    @fleet_writes.post(
+        "/firewall/{what}",
+        summary="Apply, confirm or restore across the whole fleet",
+        responses={
+            status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
+            status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+        },
+    )
+    async def firewall_everywhere(
+        what: str,
+        rules: Rules,
+        snapshots: SnapshotsDep,
+        fleet: FleetDep,
+        rollback: int | None = None,
+        snapshot: int | None = None,
+    ) -> FleetFirewallResult:
+        """Every node does it to its own firewall, and answers for itself.
+
+        A fleet-wide apply without a rollback is refused. It is the one place
+        warden will not let the window be left out: a rule that shuts the door
+        shuts it on every machine at once, and the watchdog on each of them is
+        the only thing that opens it again without somebody driving there.
+        """
+        if what not in DOABLE:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"no such thing to do: {what!r}; there is {', '.join(sorted(DOABLE))}",
+            )
+        seconds = settings.firewall_rollback if rollback is None else rollback
+        if what == "apply" and seconds <= 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "a fleet-wide apply has to keep its rollback - one wrong rule "
+                "would otherwise shut every machine at once, with nothing left "
+                "to open them again",
+            )
+
+        try:
+            here = FirewallResult(
+                node=settings.node,
+                url=settings.advertise_url,
+                ok=True,
+                detail=aggregate._said(
+                    what, _here(what, rules, snapshots, rollback=seconds, snapshot=snapshot)
+                ),
+            )
+        except WardenError as exc:
+            here = FirewallResult(
+                node=settings.node, url=settings.advertise_url, ok=False, detail=exc.message
+            )
+
+        params: dict[str, object] = {"rollback": seconds} if what == "apply" else {}
+        if snapshot is not None:
+            params["snapshot"] = snapshot
+        async with aggregate.client(settings.cluster_token, timeout=30.0) as http:
+            return await aggregate.firewall_fleet(
+                http, fleet.nodes(), what, params=params, here=here
+            )
+
 
     # Its own router: on `v1` the blanket person-check would run first and turn
     # a hub's perfectly good cluster token into a 401.

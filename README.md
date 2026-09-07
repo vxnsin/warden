@@ -219,6 +219,23 @@ warden firewall list   --on http://build-01:7010
 warden firewall open shop-api --on http://build-01:7010
 ```
 
+**And through the hub, over the whole fleet.** Forty machines is exactly where
+tending one firewall at a time stops being something anybody does:
+
+```sh
+warden firewall status --all             # one line per node
+warden firewall list --all               # every rule anywhere, with its node
+warden firewall open shop-api --all      # on every node that holds it
+warden firewall apply --fleet --rollback 120
+warden firewall confirm --fleet
+```
+
+Each node applies to itself, takes its own snapshot and arms its own watchdog,
+so a rule that shuts the door shuts it for two minutes rather than for good — a
+node that is never confirmed puts itself back without anybody driving there. A
+fleet-wide apply refuses to give that window up: it is the one place warden will
+not let it be left out.
+
 Reading the rules is what a token already allows. **Changing** them needs
 `allow_remote_firewall` set on the machine being asked, and it is off out of
 the box — a warden that will change its own firewall on request, listens beyond
@@ -301,9 +318,12 @@ WARDEN_UPSTREAM=http://hub:7010 WARDEN_ADVERTISE=http://build-01:7010 warden ser
 
 Each warden still hands out its own ports and never waits on the hub. The hub
 adds one view over all of them: `warden ls --all`, `warden pool --all`,
-`warden tui --all`, and a node that did not answer is named rather than quietly
-left out. [Cluster](https://github.com/vxnsin/warden/wiki/Cluster) has the
-tokens, the trust rules and what happens when a machine goes quiet.
+`warden firewall list --all`, `warden tui --all`, and a node that did not answer
+is named rather than quietly left out. The dashboard has three tabs
+across the top - services, ports and firewall rules - the same bar the setup
+screen has.
+[Cluster](https://github.com/vxnsin/warden/wiki/Cluster) has the tokens, the
+trust rules and what happens when a machine goes quiet.
 
 ## From your own code
 
