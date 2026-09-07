@@ -141,11 +141,13 @@ webhook_titles = { "node.stale" = "has stopped answering" }
 webhook_icons = { "node.stale" = "!" }        # a single - means none at all
 ```
 
-Discord gets an embed with the event above the subject and the node in the
-footer, Slack a coloured attachment with the facts as fields and the time in
-the reader's own timezone, Teams an adaptive card whose header band takes the
-nearest tone the format has a name for. `json` carries none of it, because
-whatever reads it decides how that looks.
+Discord gets an embed with the event and the mascot above the subject and the
+node in the footer, Slack a coloured attachment with the facts as fields and
+the time in the reader's own timezone, Teams an adaptive card whose header band
+takes the nearest tone the format has a name for. Addresses are set as code
+where the shape understands it, and none of the three repeats what its own
+sentence already said. `json` carries none of it, because whatever reads it
+decides how that looks.
 [Events and webhooks](https://github.com/vxnsin/warden/wiki/Events-and-webhooks)
 has where to get an address, the shape of every event, and how to check the
 signature.
