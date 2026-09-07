@@ -231,6 +231,9 @@ class Event(BaseModel):
     host: str = ""
     port: int = 0
     pid: int | None = None
+    # The token that asked, where one did. Empty for anything done at the
+    # machine itself.
+    who: str = ""
     body: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")

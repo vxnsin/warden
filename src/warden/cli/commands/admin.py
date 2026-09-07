@@ -53,6 +53,12 @@ ORIGIN_COLOURS = {
 def _shown(field: str, value: object) -> Text:
     if field in SECRETS and value:
         return Text("set", style=theme.MOSS)
+    if field == "tokens" and value:
+        # Names and reach, never the secrets. The whole point of naming them is
+        # to be able to talk about which one, without saying which one it is.
+        return Text(
+            ", ".join(f"{one['name']} ({one['scope']})" for one in value), style=theme.BONE
+        )
     if field in ADDRESSES and value:
         return Text(redacted(str(value)) or "set", style=theme.BONE)
     if value is None or value == "" or value == set() or value == {}:

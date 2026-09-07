@@ -373,7 +373,9 @@ The wiki is the long form. This page is the tour.
 ## Good to know
 
 - **The registry binds to loopback and has no token by default.** Set
-  `WARDEN_TOKEN` before binding it anywhere else.
+  `WARDEN_TOKEN` before binding it anywhere else, or give out named tokens that
+  reach only as far as they should: `tokens = [{ name = "deploy", scope =
+  "registry", secret = "..." }]`. `warden history` then says which one asked.
 - **The registry cannot open a port by itself.** A rule that comes from it may only ever touch a port inside the pool, may only reach networks declared in advance, and closes when the service's lease does. `firewall_from_registry` is off until you turn it on, and `allow_remote_firewall` decides separately whether anybody over the API may ask.
 - **`WARDEN_ALLOW_KILL` is off on purpose.** Stopping processes over the API is
   a much bigger thing to hand out than a port number. `warden kill` on the

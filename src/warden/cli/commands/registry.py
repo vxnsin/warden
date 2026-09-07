@@ -279,17 +279,30 @@ def list_services(
 
 def _history_table(events: list[Event]) -> Table:
     table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
-    for column in ("WHEN", "WHAT", "SERVICE", "KIND", "ADDRESS", "PID"):
+    columns = ["WHEN", "WHAT", "SERVICE", "KIND", "ADDRESS", "PID"]
+    # Only where there is one. A machine with a single token, or none, would
+    # otherwise get a column of dashes for a question it never asked.
+    named = any(event.who for event in events)
+    if named:
+        columns.append("ASKED BY")
+    for column in columns:
         table.add_column(column)
     for event in events:
-        table.add_row(
+        row = [
             Text(theme.age(event.at), style=theme.BONE_DIM),
             Text(event.action, style=ACTION_COLOURS.get(event.action, theme.BONE)),
             event.name,
             Text(event.kind, style=theme.kind_colour(event.kind)),
             event.address,
             Text(str(event.pid) if event.pid else "-", style=theme.BONE_DIM),
-        )
+        ]
+        if named:
+            row.append(
+                Text(event.who, style=theme.AMETHYST)
+                if event.who
+                else Text("at the machine", style=theme.BONE_DIM)
+            )
+        table.add_row(*row)
     return table
 
 

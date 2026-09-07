@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from warden.core import asking
 from warden.firewall.model import Rule
 from warden.models import FIREWALL, PORT, Event, Node, Registration
 
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS events (
     scope   TEXT NOT NULL DEFAULT 'port',
     subject TEXT NOT NULL DEFAULT '',
     body    TEXT NOT NULL DEFAULT '{}',
+    who     TEXT NOT NULL DEFAULT '',
     action  TEXT NOT NULL,
     name    TEXT NOT NULL,
     kind    TEXT NOT NULL,
@@ -105,6 +107,9 @@ ADDED_EVENT_COLUMNS = {
     "scope": "TEXT NOT NULL DEFAULT 'port'",
     "subject": "TEXT NOT NULL DEFAULT ''",
     "body": "TEXT NOT NULL DEFAULT '{}'",
+    # Which named token asked. Empty for anything done at the machine itself,
+    # where there is no token and so nobody to name.
+    "who": "TEXT NOT NULL DEFAULT ''",
 }
 
 REGISTERED = "registered"
@@ -151,6 +156,7 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         scope=_column(row, "scope", "port"),
         subject=_column(row, "subject", ""),
         body=json.loads(_column(row, "body", "{}")),
+        who=_column(row, "who", ""),
         action=row["action"],
         name=row["name"],
         kind=row["kind"],
@@ -273,14 +279,15 @@ class Store:
         self._db.execute(
             """
             INSERT INTO events
-                (at, scope, subject, body, action, name, kind, project, host, port, pid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (at, scope, subject, body, who, action, name, kind, project, host, port, pid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _isoformat(at),
                 PORT,
                 held["name"],
                 "{}",
+                asking.who(),
                 action,
                 held["name"],
                 held["kind"],
@@ -304,6 +311,7 @@ class Store:
                 host=held["host"],
                 port=held["port"],
                 pid=held["pid"],
+                who=asking.who(),
             )
         )
 
@@ -315,20 +323,27 @@ class Store:
         port changing hands, and nobody should have to look in two places.
         """
         event = Event(
-            at=datetime.now(UTC), scope=scope, action=action, subject=subject, body=body
+            at=datetime.now(UTC),
+            scope=scope,
+            action=action,
+            subject=subject,
+            body=body,
+            who=asking.who(),
         )
         with self._lock:
             self._db.execute(
                 """
                 INSERT INTO events
-                    (at, scope, subject, body, action, name, kind, project, host, port, pid)
-                VALUES (?, ?, ?, ?, ?, '', '', NULL, '', 0, NULL)
+                    (at, scope, subject, body, who, action,
+                     name, kind, project, host, port, pid)
+                VALUES (?, ?, ?, ?, ?, ?, '', '', NULL, '', 0, NULL)
                 """,
                 (
                     _isoformat(event.at),
                     scope,
                     subject,
                     json.dumps(body, default=str, separators=(",", ":")),
+                    event.who,
                     action,
                 ),
             )

@@ -13,7 +13,14 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 from platformdirs import user_config_path, user_data_path
-from pydantic import BeforeValidator, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import (
     BaseSettings,
     NoDecode,
@@ -88,6 +95,62 @@ def parse_pairs(value: object) -> object:
 
 
 PairSet = Annotated[dict[str, str], NoDecode, BeforeValidator(parse_pairs)]
+
+
+# What a token is allowed to do. `all` is what a single WARDEN_TOKEN has always
+# meant, and stays the default so nothing written before this existed changes.
+READ = "read"
+REGISTRY = "registry"
+FIREWALL = "firewall"
+EVERYTHING = "all"
+SCOPES = (READ, REGISTRY, FIREWALL, EVERYTHING)
+
+# Which scopes satisfy a demand. Reading is the floor: anything that may change
+# something may also look at it.
+COVERS = {
+    READ: {READ},
+    REGISTRY: {REGISTRY, READ},
+    FIREWALL: {FIREWALL, READ},
+    EVERYTHING: set(SCOPES),
+}
+
+
+class Grant(BaseModel):
+    """One token, what it is called, and how far it reaches.
+
+    The name is the half that makes the history worth reading: until there were
+    names, `warden history` could say what happened to a port and never who
+    asked for it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    secret: str
+    scope: Literal["read", "registry", "firewall", "all"] = EVERYTHING
+
+    def may(self, wanted: str) -> bool:
+        return wanted in COVERS[self.scope]
+
+
+def parse_tokens(value: object) -> object:
+    """Accept ``"deploy:registry:s3cret, grafana:read:hunter2"``.
+
+    The secret is everything after the second colon, because a secret is
+    whatever somebody generated and colons are in plenty of them.
+    """
+    if not isinstance(value, str):
+        return value
+    said = []
+    for chunk in value.split(","):
+        name, _, rest = chunk.strip().partition(":")
+        scope, _, secret = rest.partition(":")
+        if name and secret:
+            said.append({"name": name, "scope": scope or EVERYTHING, "secret": secret})
+    return said
+
+
+TokenSet = Annotated[list[Grant], NoDecode, BeforeValidator(parse_tokens)]
 
 
 def default_database() -> Path:
@@ -216,6 +279,10 @@ class Settings(BaseSettings):
     probe: bool = True
     allow_kill: bool = False
     token: str | None = None
+    # Named tokens, each reaching only as far as it says. A single `token` above
+    # is still one that reaches everywhere, so a machine set up before this
+    # existed behaves exactly as it did.
+    tokens: TokenSet = Field(default_factory=list)
 
     update_check: bool = True
     update_repo: str = "vxnsin/warden"
@@ -278,6 +345,16 @@ class Settings(BaseSettings):
     @classmethod
     def _tidy_node(cls, value: str) -> str:
         return slugify(value)
+
+    def grants(self) -> list[Grant]:
+        """Every token this warden accepts, whatever it was written down as.
+
+        The single `token` comes first and is called what it has always been
+        called, so a history written before there were names reads the same
+        afterwards.
+        """
+        found = [Grant(name="token", secret=self.token, scope=EVERYTHING)] if self.token else []
+        return [*found, *self.tokens]
 
     @field_validator("firewall_allow_from")
     @classmethod
