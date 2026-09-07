@@ -7,6 +7,7 @@ other commands and comparing what they said.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -213,7 +214,8 @@ def _firewall(settings: Settings) -> list[Check]:
     A development window that outlives the afternoon it was opened for is the
     thing this is here to make impossible to forget.
     """
-    from warden.core.store import RuleStore, Store
+    from warden.core.store import RuleStore, Snapshots, Store
+    from warden.firewall.guard import pending
     from warden.firewall.link import DEV_MODE
     from warden.firewall.model import Origin
 
@@ -221,8 +223,10 @@ def _firewall(settings: Settings) -> list[Check]:
     try:
         with Store(settings.database) as store:
             rules = RuleStore(store).list()
+            drifted = pending(rules, Snapshots(store))
     except Exception:  # a database that will not open is the store's news, not this
         return checks
+    checks.extend(_not_applied_yet(drifted))
     if not rules:
         return checks
 
@@ -242,6 +246,33 @@ def _firewall(settings: Settings) -> list[Check]:
             Check(NOTE, f"{_many(len(theirs), 'rule')} opened for a registered service")
         )
     return checks
+
+
+# After this long, a rule nobody applied stops being something in progress and
+# starts being something forgotten.
+STALE_RULES = timedelta(days=1)
+
+
+def _not_applied_yet(drifted: object) -> list[Check]:
+    """Rules that are written down and not in the kernel.
+
+    The most expensive thing warden can do is let somebody believe a rule is in
+    force. Doctor exists to answer "why is this not working", and this is that
+    answer more often than any other single thing.
+    """
+    if not drifted:
+        return []
+    said = _many(drifted.count, "rule")
+    if drifted.unknown:
+        return [Check(NOTE, f"{said} written down and never applied from here")]
+    old = datetime.now(UTC) - drifted.applied_at > STALE_RULES
+    return [
+        Check(
+            WARN if old else NOTE,
+            f"{said} changed since the last apply {theme.age(drifted.applied_at)}"
+            " - `warden firewall apply` makes them true",
+        )
+    ]
 
 
 def _who_may_change_it(settings: Settings) -> list[Check]:

@@ -206,7 +206,8 @@ $ warden firewall dev-mode --for 2   # the whole pool, for the afternoon
 ```
 
 Both close themselves: the first when the service's lease lapses, the second
-when its clock runs out. Neither can reach a port warden does not hand out —
+when its clock runs out. Neither is in the kernel until `warden firewall apply`,
+and `warden firewall pending` says which rules are still only written down. Neither can reach a port warden does not hand out —
 `22` and `3389` are outside the pool, and stay there.
 
 **From somewhere else, if that machine says so.** A deploy that has just

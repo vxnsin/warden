@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from warden.core.store import Snapshots
 from warden.errors import FirewallError
 from warden.firewall.backends.base import Backend
-from warden.firewall.model import Policy
+from warden.firewall.model import Policy, Rule
 
 APPLYING = "applying a policy"
 ADOPTING = "adopting another firewall"
@@ -49,6 +49,44 @@ def armed(snapshots: Snapshots) -> Armed | None:
     return Armed(*waiting) if waiting else None
 
 
+@dataclass(frozen=True)
+class Pending:
+    """What is written down that is not in the kernel, and the other way round."""
+
+    added: list[str]
+    removed: list[str]
+    applied_at: datetime | None
+    # True where warden cannot know: it has never applied from here, or a
+    # rollback put back a ruleset it did not compose.
+    unknown: bool = False
+
+    def __bool__(self) -> bool:
+        return bool(self.added or self.removed)
+
+    @property
+    def count(self) -> int:
+        return len(self.added) + len(self.removed)
+
+
+def pending(rules: list[Rule], snapshots: Snapshots) -> Pending:
+    """Which rules have changed since the last apply.
+
+    Written down is not applied, and after `warden firewall allow` nothing says
+    so again. On a machine where three rules have been sitting in the book since
+    yesterday, that is the difference between a firewall and a list.
+    """
+    written = sorted(rule.name for rule in rules)
+    live = snapshots.live()
+    if live is None:
+        return Pending(added=written, removed=[], applied_at=None, unknown=True)
+    at, applied = live
+    return Pending(
+        added=[name for name in written if name not in applied],
+        removed=[name for name in applied if name not in written],
+        applied_at=at,
+    )
+
+
 def apply(
     backend: Backend,
     snapshots: Snapshots,
@@ -76,6 +114,7 @@ def apply(
         # Nothing was applied, so nothing should be waiting to be undone.
         snapshots.disarm()
         raise
+    snapshots.went_live([rule.name for rule in policy.rules])
     snapshots.said(
         APPLIED,
         backend.kind,
@@ -112,6 +151,9 @@ def roll_back(backend: Backend, snapshots: Snapshots, snapshot: int | None = Non
     if body is None:
         raise FirewallError(f"no snapshot {snapshot}")
     backend.restore(body)
+    # What is in the kernel now is whatever was there before, which warden did
+    # not write and cannot name. Saying nothing beats saying something wrong.
+    snapshots.forget_live()
     was_waiting = snapshots.disarm()
     snapshots.said(
         ROLLED_BACK if was_waiting else RESTORED, backend.kind, snapshot=snapshot

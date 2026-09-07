@@ -708,6 +708,13 @@ def firewall_adopt(
         f"it off, restoring puts it back",
         style=theme.BONE_DIM,
     )
+    drifted = guard.pending(_rules().list(), _snapshots())
+    if drifted:
+        console.print(
+            f"{theme.plural(drifted.count, 'rule')} changed since the last apply"
+            " - `warden firewall pending` says which",
+            style=theme.SHRIEKER,
+        )
     if waiting is not None:
         _waiting_line(waiting)
 
@@ -774,7 +781,7 @@ def _status_of_the_fleet(url: str | None, token: str | None, *, as_json: bool) -
         return
 
     table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
-    for column in ("NODE", "BACKEND", "RULES", "REGISTRY", "REMOTE", "ROLLING BACK"):
+    for column in ("NODE", "BACKEND", "RULES", "REGISTRY", "PENDING", "REMOTE", "ROLLING BACK"):
         table.add_column(column)
     for one in found.firewalls:
         table.add_row(
@@ -782,6 +789,9 @@ def _status_of_the_fleet(url: str | None, token: str | None, *, as_json: bool) -
             Text(one.backend, style="" if one.available else theme.BONE_DIM),
             str(one.rules),
             str(one.from_registry),
+            Text(str(one.pending), style=theme.SHRIEKER)
+            if one.pending
+            else Text("-", style=theme.BONE_DIM),
             Text("yes", style=theme.MOSS) if one.remote else Text("no", style=theme.BONE_DIM),
             Text(theme.until(one.rollback_at), style=theme.SHRIEKER)
             if one.rollback_at
@@ -789,6 +799,62 @@ def _status_of_the_fleet(url: str | None, token: str | None, *, as_json: bool) -
         )
     console.print(table)
     _missing(found.unreachable)
+
+
+@firewall_app.command("pending")
+def firewall_pending(as_json: JsonOption = False) -> None:
+    """Which rules have changed since the last apply.
+
+    Writing a rule down does not make it true, and nothing said so again after
+    the moment it was written. On a machine where three rules have been in the
+    book since yesterday, this is the difference between a firewall and a list.
+    """
+    _said_closed(_tidy())
+    found = guard.pending(_rules().list(), _snapshots())
+
+    if as_json:
+        _dump(
+            {
+                "added": found.added,
+                "removed": found.removed,
+                "applied_at": found.applied_at.isoformat() if found.applied_at else None,
+                "unknown": found.unknown,
+            }
+        )
+        return
+
+    if found.unknown:
+        console.print(
+            "nothing has been applied from here, so there is nothing to compare "
+            "against - `warden firewall apply` makes what is written down true",
+            style=theme.SHRIEKER,
+        )
+        if found.added:
+            console.print(f"{theme.plural(len(found.added), 'rule')} written down",
+                          style=theme.BONE_DIM)
+        return
+
+    if not found:
+        console.print(
+            f"nothing since the last apply, {theme.age(found.applied_at)}",
+            style=theme.MOSS,
+        )
+        return
+
+    table = Table(box=None, pad_edge=False, show_header=False)
+    table.add_column(no_wrap=True)
+    table.add_column(overflow="fold")
+    for name in found.added:
+        table.add_row(Text("+", style=theme.MOSS), name)
+    for name in found.removed:
+        table.add_row(Text("-", style=theme.EMBER), name)
+    console.print(table)
+    console.print()
+    console.print(
+        f"last applied {theme.age(found.applied_at)}  -  "
+        "`warden firewall apply` makes them true",
+        style=theme.BONE_DIM,
+    )
 
 
 @firewall_app.command("status")
@@ -843,6 +909,7 @@ def firewall_status(
                 "backend": backend.kind,
                 "available": backend.available(),
                 "rules": len(_rules().list()),
+                "pending": guard.pending(_rules().list(), _snapshots()).count,
                 "rollback_at": waiting.deadline.isoformat() if waiting else None,
             }
         )
@@ -851,6 +918,13 @@ def firewall_status(
         f"{backend.kind}: " + ("present" if backend.available() else "not on this machine"),
         style=theme.BONE_DIM,
     )
+    drifted = guard.pending(_rules().list(), _snapshots())
+    if drifted:
+        console.print(
+            f"{theme.plural(drifted.count, 'rule')} changed since the last apply"
+            " - `warden firewall pending` says which",
+            style=theme.SHRIEKER,
+        )
     if waiting is not None:
         _waiting_line(waiting)
 
