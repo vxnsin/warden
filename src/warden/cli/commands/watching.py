@@ -104,6 +104,13 @@ def webhook(
     test: Annotated[
         bool, typer.Option("--test", help="Post one made-up event from this machine now.")
     ] = False,
+    event: Annotated[
+        str | None,
+        typer.Option("--event", help="Which one to make up, like `node.stale`."),
+    ] = None,
+    every: Annotated[
+        bool, typer.Option("--all", help="Post one of every event there is, in order.")
+    ] = False,
     url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
@@ -113,18 +120,13 @@ def webhook(
     `--test` posts from here with this machine's settings, which is what
     `warden setup` has just written down. Without it the answer comes from the
     warden that is running, which is a different thing and can differ.
+
+    `--event node.stale` makes up that one instead, and `--all` posts one of
+    each - which is how to see what thirteen kinds of message look like in a
+    chat window without waiting for thirteen things to happen.
     """
-    if test:
-        here = Settings()
-        if not here.webhook:
-            raise _fail(WardenError("nothing to post to - `warden setup` writes one down"))
-        problem = shared.send_one(here)
-        if as_json:
-            _dump({"target": redacted(here.webhook), "posted": not problem, "error": problem})
-        elif problem:
-            raise _fail(WardenError(f"it did not arrive: {problem}"))
-        else:
-            console.print(f"posted to {redacted(here.webhook)}", style=theme.MOSS)
+    if test or every or event:
+        _post_made_up(_which(event, every), as_json=as_json)
         return
 
     with shared._client(url, token) as client:
@@ -156,3 +158,65 @@ def webhook(
     if status.last_error:
         table.add_row("last error", Text(status.last_error, style=theme.EMBER))
     console.print(table)
+
+
+def _which(event: str | None, every: bool) -> list[str]:
+    """The events to make up, in the order they are catalogued."""
+    if every:
+        return list(happenings.NAMES)
+    if event is None:
+        return ["port.registered"]
+    full = happenings.known(event)
+    if full is None:
+        raise _fail(
+            WardenError(f"no event called {event!r}; there is {', '.join(happenings.NAMES)}")
+        )
+    return [full]
+
+
+def _post_made_up(names: list[str], *, as_json: bool) -> None:
+    """Post one made-up event per name and say what arrived.
+
+    Posted one at a time and in order, because a chat window shows them in the
+    order they land and thirteen at once would land in whichever order the
+    other end felt like.
+    """
+    here = Settings()
+    if not here.webhook:
+        raise _fail(WardenError("nothing to post to - `warden setup` writes one down"))
+
+    sent = [(name, shared.send_one(here, happenings.like(name))) for name in names]
+    if len(sent) == 1:
+        _one_went(here.webhook, sent[0][1], as_json=as_json)
+        return
+
+    if as_json:
+        _dump(
+            {
+                "target": redacted(here.webhook),
+                "posted": [
+                    {"event": name, "posted": not problem, "error": problem}
+                    for name, problem in sent
+                ],
+            }
+        )
+        return
+
+    for name, problem in sent:
+        console.print(
+            f"{name:<22}{problem or 'posted'}",
+            style=theme.EMBER if problem else theme.MOSS,
+        )
+    console.print(f"to {redacted(here.webhook)}", style=theme.BONE_DIM)
+    if any(problem for _, problem in sent):
+        raise typer.Exit(1)
+
+
+def _one_went(webhook: str, problem: str | None, *, as_json: bool) -> None:
+    """One event, said the way it has always been said."""
+    if as_json:
+        _dump({"target": redacted(webhook), "posted": not problem, "error": problem})
+    elif problem:
+        raise _fail(WardenError(f"it did not arrive: {problem}"))
+    else:
+        console.print(f"posted to {redacted(webhook)}", style=theme.MOSS)

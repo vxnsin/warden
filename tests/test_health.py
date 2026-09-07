@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -7,7 +8,7 @@ from typer.testing import CliRunner
 
 from warden import __version__
 from warden.cli import app, shared
-from warden.core import health
+from warden.core import health, installed
 from warden.core.config import Settings
 from warden.core.health import FAIL, NOTE, OK, WARN, Check, examine, exit_code
 from warden.errors import NotPermittedError, UnknownServiceError, WardenError
@@ -292,3 +293,27 @@ def test_a_listing_that_fails_for_any_other_reason_still_fails(settings: Setting
     broken = FakeClient(services=WardenError("the database is gone"))
     checks = examine(broken, settings)
     assert FAIL in levels(checks)
+
+
+def test_an_update_says_which_command_would_fetch_it(monkeypatch: pytest.MonkeyPatch):
+    """A version number nobody can act on is half an answer."""
+    monkeypatch.setattr(
+        installed, "how", lambda: installed.Install("pipx", "/x", "pipx upgrade warden-ports")
+    )
+    checks = health._how_installed()
+    assert checks[0].level == health.NOTE
+    assert "pipx upgrade warden-ports" in checks[0].text
+
+
+def test_being_installed_under_somebody_elses_name_is_a_warning(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(installed, "how", lambda: installed._uv_tool(Path("/x/uv/tools/warden")))
+    checks = health._wrong_name()
+    assert checks and checks[0].level == health.WARN
+    assert "different project" in checks[0].text
+
+
+def test_the_usual_install_is_not_worth_a_warning(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        installed, "how", lambda: installed._uv_tool(Path("/x/uv/tools/warden-ports"))
+    )
+    assert health._wrong_name() == []

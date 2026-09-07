@@ -19,7 +19,7 @@ from warden.cli.shared import (
     app,
     console,
 )
-from warden.core import updates
+from warden.core import config, installed, updates
 from warden.core.config import Settings
 from warden.errors import WardenError
 from warden.models import (
@@ -53,7 +53,7 @@ def update(
     with shared._client(url, token) as client:
         try:
             if not (apply or fleet):
-                _show_update(client.update_status(), as_json=as_json)
+                _show_update(client.update_status(), as_json=as_json, here=url is None)
                 return
 
             what = "every warden in the fleet" if fleet else f"the warden at {client.url}"
@@ -74,7 +74,7 @@ def update(
     # No warden answered, and the question was never really about one.
     try:
         if not apply:
-            _show_update(updates.check_now(settings), as_json=as_json)
+            _show_update(updates.check_now(settings), as_json=as_json, here=url is None)
             return
         if not yes and not typer.confirm("Update this machine?"):
             console.print("left alone", style=theme.BONE_DIM)
@@ -89,9 +89,12 @@ def _nobody_home(exc: WardenError) -> bool:
     """Whether this was 'no warden there' rather than a warden saying no."""
     return "no warden reachable" in exc.message
 
-def _show_update(status: UpdateStatus, *, as_json: bool) -> None:
+def _show_update(status: UpdateStatus, *, as_json: bool, here: bool = False) -> None:
     if as_json:
-        _dump(status.model_dump(mode="json"))
+        said = status.model_dump(mode="json")
+        if here:
+            said["update_with"] = updates.would_run(Settings())
+        _dump(said)
         return
     if status.available:
         console.print(f"warden {status.latest} is out, this is {status.current}", style=theme.GLOW)
@@ -101,6 +104,28 @@ def _show_update(status: UpdateStatus, *, as_json: bool) -> None:
         console.print(f"{status.current} is the newest there is", style=theme.BONE_DIM)
     else:
         console.print(f"{status.current}; {status.reason}", style=theme.BONE_DIM)
+    if here:
+        _show_how_to_update(status.available)
+
+
+def _show_how_to_update(available: bool) -> None:
+    """Which command actually replaces this copy - the part a link cannot say."""
+    settings = Settings()
+    found = installed.how()
+    if settings.update_command:
+        found = installed.Install(
+            "update_command", str(config.config_file()), settings.update_command
+        )
+    if not found.command or not (available or found.wrong):
+        return
+    console.print()
+    console.print(f"installed as {found.said}", style=theme.BONE_DIM)
+    if found.note:
+        console.print(found.note, style=theme.SHRIEKER if found.wrong else theme.BONE_DIM)
+    console.print("to update:", style=theme.BONE_DIM, end=" ")
+    console.print(found.command, style=theme.GLOW)
+    if found.runnable:
+        console.print("`warden update --apply` runs it here.", style=theme.BONE_DIM)
 
 
 def _show_fleet_update(result: FleetUpdate, *, as_json: bool) -> None:
