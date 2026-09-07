@@ -141,3 +141,40 @@ def test_a_colour_can_be_overridden_one_event_at_a_time():
     assert looks(node_event("stale"), {"node.stale": "#123456"})[0] == 0x123456
     assert looks(node_event("stale"), {"node.stale": "not a colour"})[0] == 0xA8434A
     assert looks(node_event("joined"), {"node.stale": "#123456"})[0] == 0x4C9A5B
+
+
+def test_the_words_can_be_overridden_one_event_at_a_time():
+    from warden.core.webhooks import looks
+
+    said = {"node.stale": "antwortet nicht mehr"}
+    assert looks(node_event("stale"), None, said)[1] == "antwortet nicht mehr"
+    assert looks(node_event("joined"), None, said)[1] == "reported in"
+
+
+def test_the_words_reach_every_shape_that_shows_them():
+    said = {"node.stale": "antwortet nicht mehr"}
+    for shape in (webhooks.DISCORD, webhooks.SLACK, webhooks.TEAMS):
+        body, _ = webhooks.render(node_event(), node="hub", shape=shape, titles=said)
+        assert b"antwortet nicht mehr" in body
+
+
+def test_the_colour_and_the_words_are_named_apart():
+    """Setting one must not disturb the other."""
+    from warden.core.webhooks import looks
+
+    colour, words = looks(node_event("stale"), {"node.stale": "#123456"}, None)
+    assert colour == 0x123456
+    assert words == "has gone quiet"
+
+    colour, words = looks(node_event("stale"), None, {"node.stale": "gone"})
+    assert colour == 0xA8434A
+    assert words == "gone"
+
+
+def test_the_plain_shape_carries_neither_because_it_carries_the_event():
+    """`json` is for something that reads fields, not words."""
+    body, _ = webhooks.render(
+        node_event(), node="hub", shape=webhooks.JSON, titles={"node.stale": "gone"}
+    )
+    assert b"gone" not in body
+    assert b'"action":"stale"' in body

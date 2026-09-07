@@ -54,25 +54,36 @@ LOOKS: dict[str, tuple[int, str]] = {
 PLAIN = (0x6E6E6E, "happened")
 
 
-def looks(event: Event, overrides: Mapping[str, str] | None = None) -> tuple[int, str]:
-    """The colour and the words for one event, with any override applied."""
-    colour, title = LOOKS.get(event.full, PLAIN)
-    said = (overrides or {}).get(event.full)
-    if said:
-        colour = _colour(said, colour)
-    return colour, title
+def looks(
+    event: Event,
+    colours: Mapping[str, str] | None = None,
+    titles: Mapping[str, str] | None = None,
+) -> tuple[int, str]:
+    """The colour and the words for one event, with any overrides applied.
+
+    Both are named one event at a time, so setting `node.stale` leaves the
+    other twelve with the ones they came with.
+    """
+    colour, said = LOOKS.get(event.full, PLAIN)
+    chosen = (colours or {}).get(event.full)
+    if chosen:
+        colour = _colour(chosen, colour)
+    return colour, (titles or {}).get(event.full) or said
 
 
 def _colour(said: str, fallback: int) -> int:
+    """`#4c9a5b` or `4c9a5b`. Anything else keeps the one it came with, because
+    a colour Discord refuses would lose the message rather than the colour."""
     try:
         return int(said.lstrip("#"), 16)
     except ValueError:
         return fallback
 
-
-def sentence(event: Event, node: str) -> str:
+def sentence(
+    event: Event, node: str, titles: Mapping[str, str] | None = None
+) -> str:
     """One line, readable by someone who has never heard of warden."""
-    _, title = looks(event)
+    _, title = looks(event, None, titles)
     if event.scope == PORT:
         return f"{event.name} {VERBS.get(event.action, event.action)} {event.address} on {node}"
     where = f" on {node}" if event.scope != NODE else ""
@@ -106,7 +117,10 @@ OF_A_PORT = ("name", "kind", "project", "host", "port", "pid")
 
 
 def _plain(
-    event: Event, node: str, colours: Mapping[str, str] | None = None
+    event: Event,
+    node: str,
+    colours: Mapping[str, str] | None = None,
+    titles: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """The event as it is, with only the fields this kind of event has.
 
@@ -124,14 +138,17 @@ def _plain(
 
 
 def _discord(
-    event: Event, node: str, colours: Mapping[str, str] | None = None
+    event: Event,
+    node: str,
+    colours: Mapping[str, str] | None = None,
+    titles: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     return {
         "embeds": [
             {
                 "title": _title(event),
-                "description": sentence(event, node),
-                "color": looks(event, colours)[0],
+                "description": sentence(event, node, titles),
+                "color": looks(event, colours, titles)[0],
                 "timestamp": event.at.isoformat(),
                 "fields": [
                     {"name": name, "value": value, "inline": True}
@@ -143,16 +160,22 @@ def _discord(
 
 
 def _slack(
-    event: Event, node: str, colours: Mapping[str, str] | None = None
+    event: Event,
+    node: str,
+    colours: Mapping[str, str] | None = None,
+    titles: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     # `text` as well as `blocks`, because that is what a phone notification
     # shows and what a client too old for blocks falls back to.
     return {
-        "text": sentence(event, node),
+        "text": sentence(event, node, titles),
         "blocks": [
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*{event.action}* {sentence(event, node)}"},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{event.action}* {sentence(event, node, titles)}",
+                },
             },
             {
                 "type": "context",
@@ -170,7 +193,10 @@ def _slack(
 
 
 def _teams(
-    event: Event, node: str, colours: Mapping[str, str] | None = None
+    event: Event,
+    node: str,
+    colours: Mapping[str, str] | None = None,
+    titles: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     # An adaptive card inside a message, which is what a Power Automate flow
     # accepts. The old Office 365 connector card is on its way out.
@@ -186,7 +212,7 @@ def _teams(
                     "body": [
                         {
                             "type": "TextBlock",
-                            "text": sentence(event, node),
+                            "text": sentence(event, node, titles),
                             "weight": "Bolder",
                             "wrap": True,
                         },
@@ -214,13 +240,14 @@ def render(
     shape: str = JSON,
     secret: str | None = None,
     colours: Mapping[str, str] | None = None,
+    titles: Mapping[str, str] | None = None,
 ) -> tuple[bytes, dict[str, str]]:
     """The bytes to post, and the headers to post them with.
 
     Serialised here rather than left to the HTTP client, because a signature
     over a body somebody else re-serialises signs something else.
     """
-    payload = BUILDERS[shape](event, node, colours)
+    payload = BUILDERS[shape](event, node, colours, titles)
     body = json.dumps(payload, separators=(",", ":")).encode()
     headers = {
         "Content-Type": "application/json",

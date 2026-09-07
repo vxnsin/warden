@@ -215,6 +215,8 @@ class Settings(BaseSettings):
     # `node.stale=#e5544b, port.moved=#c8892a` - one at a time, the rest keep
     # the colours they came with.
     webhook_colours: PairSet = Field(default_factory=dict)
+    # `node.stale=has stopped answering` - the words after the subject.
+    webhook_titles: PairSet = Field(default_factory=dict)
 
     firewall_backend: str | None = None
     firewall_rollback: int = Field(default=60, ge=0, le=3600)
