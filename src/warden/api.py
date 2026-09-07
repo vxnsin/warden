@@ -21,8 +21,8 @@ from fastapi import (
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from warden import __version__
-from warden.core import metrics, updates
-from warden.core.config import Settings
+from warden.core import asking, config, metrics, updates
+from warden.core.config import Grant, Settings
 from warden.core.events import EventBus
 from warden.core.store import RuleStore, Snapshots, Store
 from warden.errors import NotPermittedError, WardenError
@@ -156,34 +156,72 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             and secrets.compare_digest(authorization, f"Bearer {secret}")
         )
 
-    def _check(secret: str | None, authorization: str | None, what: str) -> None:
-        if secret is None:
-            return
-        if not _matches(secret, authorization):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"invalid or missing {what}")
+    def _holder(authorization: str | None) -> Grant | None:
+        """Which token this is, if it is one at all.
 
-    def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
-        """Anything a person does."""
-        _check(settings.token, authorization, "API token")
-
-    def cluster(authorization: Annotated[str | None, Header()] = None) -> None:
-        """Announcing. A node must manage this without a person's token."""
-        _check(settings.cluster_token, authorization, "cluster token")
-
-    def known_caller(authorization: Annotated[str | None, Header()] = None) -> None:
-        """A person with the API token, or another warden with the cluster one.
-
-        Guards reading, and asking a warden to update itself - both things the
-        hub does on its rounds and an operator does by hand. The cluster token
-        only ever adds access; it can never open a door WARDEN_TOKEN has closed.
+        Every grant is compared, never stopping at the first match, so the time
+        this takes says nothing about which token was sent.
         """
-        if settings.token is None:
+        found = None
+        for grant in settings.grants():
+            if _matches(grant.secret, authorization):
+                found = grant
+        return found
+
+    def allowed(scope: str):
+        """A dependency that lets through a token reaching at least this far.
+
+        Async on purpose. A sync dependency runs in a threadpool, and a name
+        set on the context there is set on a copy that is thrown away when it
+        returns - so the store would write down nobody. An async one runs in
+        the request's own context, and the endpoint inherits it.
+        """
+
+        async def check(authorization: Annotated[str | None, Header()] = None) -> None:
+            grants = settings.grants()
+            if not grants:
+                # Nothing written down is the loopback default, and has always
+                # meant no check rather than no access.
+                return
+            grant = _holder(authorization)
+            if grant is None:
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED, "invalid or missing token"
+                )
+            if not grant.may(scope):
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    f"the token {grant.name!r} may only {grant.scope}, and this is "
+                    f"a {scope} thing to do",
+                )
+            asking.set_to(grant.name)
+
+        return check
+
+    async def authorize(authorization: Annotated[str | None, Header()] = None) -> None:
+        """Anything a person does to the registry."""
+        await allowed(config.REGISTRY)(authorization)
+
+    async def cluster(authorization: Annotated[str | None, Header()] = None) -> None:
+        """Announcing. A node must manage this without a person's token."""
+        if settings.cluster_token is None:
             return
-        if _matches(settings.token, authorization):
-            return
+        if not _matches(settings.cluster_token, authorization):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "invalid or missing cluster token"
+            )
+        asking.set_to("cluster")
+
+    async def known_caller(authorization: Annotated[str | None, Header()] = None) -> None:
+        """A person with a token that reads, or another warden with the cluster one.
+
+        The cluster token only ever adds access; it can never open a door a
+        person's token has closed.
+        """
         if _matches(settings.cluster_token, authorization):
+            asking.set_to("cluster")
             return
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing token")
+        await allowed(config.READ)(authorization)
 
     app = FastAPI(
         title="Warden",
@@ -441,6 +479,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         prefix="/v1/fleet", tags=["fleet"], dependencies=[Depends(authorize)]
     )
 
+    # Its own router, because a token that may register on a node is not
+    # thereby a token that may change what crosses it.
+    fleet_firewall_writes = APIRouter(
+        prefix="/v1/fleet",
+        tags=["fleet"],
+        dependencies=[Depends(allowed(config.FIREWALL))],
+        responses={status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}},
+    )
+
     @fleet_writes.post(
         "/services/{node}",
         summary="Register a service on one named node",
@@ -562,7 +609,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Changing one node's firewall from the hub. The node's own
     # `allow_remote_firewall` still decides, and its refusal comes back in its
     # own words - the hub adds nothing to the question and nothing to the answer.
-    @fleet_writes.post(
+    @fleet_firewall_writes.post(
         "/firewall/{node}/open",
         summary="Open a registered service's port on one named node",
         responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
@@ -587,7 +634,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 require_https=settings.require_https,
             )
 
-    @fleet_writes.post(
+    @fleet_firewall_writes.post(
         "/firewall/{node}/rules",
         summary="Write a rule down on one named node",
         responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
@@ -611,7 +658,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 require_https=settings.require_https,
             )
 
-    @fleet_writes.delete(
+    @fleet_firewall_writes.delete(
         "/firewall/{node}/rules/{name}",
         summary="Take one rule back out on one named node",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -633,7 +680,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @fleet_writes.post(
+    @fleet_firewall_writes.post(
         "/firewall/{node}/{what}",
         summary="Apply, confirm or restore on one named node",
         responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
@@ -687,7 +734,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return firewall_restore(snapshots, snapshot)
 
 
-    @fleet_writes.post(
+    @fleet_firewall_writes.post(
         "/firewall/open",
         summary="Open a service on every node that holds it",
         responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
@@ -751,7 +798,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             detail=aggregate._opened(opened.model_dump(mode="json")),
         )
 
-    @fleet_writes.post(
+    @fleet_firewall_writes.post(
         "/firewall/{what}",
         summary="Apply, confirm or restore across the whole fleet",
         responses={
@@ -863,7 +910,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     firewall_writes = APIRouter(
         prefix="/v1/firewall",
         tags=["firewall"],
-        dependencies=[Depends(authorize), Depends(may_change_the_firewall)],
+        dependencies=[
+            Depends(allowed(config.FIREWALL)),
+            Depends(may_change_the_firewall),
+        ],
         responses={status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}},
     )
 
@@ -983,6 +1033,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(nodes)
     app.include_router(fleet_view)
     app.include_router(fleet_writes)
+    app.include_router(fleet_firewall_writes)
     app.include_router(firewall_reads)
     app.include_router(firewall_writes)
 
