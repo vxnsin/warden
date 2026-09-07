@@ -159,6 +159,9 @@ async def deliver(http: httpx.AsyncClient, settings: Settings, event: Event) -> 
         node=settings.node,
         shape=settings.webhook_format,
         secret=settings.webhook_secret,
+        colours=settings.webhook_colours,
+        titles=settings.webhook_titles,
+        icons=settings.webhook_icons,
     )
     problem = "nowhere to post to"
     for attempt in range(ATTEMPTS):

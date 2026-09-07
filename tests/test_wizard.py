@@ -73,7 +73,7 @@ def test_only_the_signed_shape_is_asked_for_a_secret():
     async def scenario(app: Setup, pilot) -> None:
         assert app.query_one("#secret-field").display
         app.query_one("#webhook-format", Select).value = "discord"
-        await pilot.pause()
+        await settled(pilot)
         assert not app.query_one("#secret-field").display
 
     asking(scenario, settings(webhook="https://chat.example/hook", webhook_format="json"))
@@ -159,7 +159,7 @@ def test_saying_no_takes_a_webhook_back_off():
 def test_a_secret_is_not_kept_for_a_shape_that_does_not_sign():
     async def scenario(app: Setup, pilot) -> None:
         app.query_one("#webhook-format", Select).value = "teams"
-        await pilot.pause()
+        await settled(pilot)
         await pilot.press("ctrl+s")
 
     answers = asking(
@@ -592,3 +592,36 @@ def test_saying_no_to_it_writes_that_down_too():
 
     answers = asking(scenario, settings(allow_remote_firewall=True))
     assert answers["allow_remote_firewall"] is False
+
+
+def test_an_icon_can_be_given_to_one_event_and_is_written_down():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#embed-which", Select).value = "node.stale"
+        await settled(pilot)
+        app.query_one("#embed-icon", Input).value = "!!"
+        await settled(pilot)
+        assert "!!" in text_of(app, "#embed-preview")
+        await pilot.press("ctrl+s")
+
+    answers = on_the_embed_tab(scenario)
+    assert answers["webhook_icons"] == {"node.stale": "!!"}
+
+
+def test_the_preview_says_the_subject_once_rather_than_twice():
+    """The heading has it, so the line under it should not repeat it."""
+
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#embed-which", Select).value = "node.stale"
+        await settled(pilot)
+        heading, said, *_ = text_of(app, "#embed-preview").splitlines()
+        assert heading.strip().endswith("build-01")
+        assert said.strip() == "has gone quiet"
+
+    on_the_embed_tab(scenario)
+
+
+def test_an_icon_nobody_typed_is_not_written_down():
+    async def scenario(app: Setup, pilot) -> None:
+        await pilot.press("ctrl+s")
+
+    assert on_the_embed_tab(scenario)["webhook_icons"] == {}

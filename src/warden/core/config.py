@@ -232,6 +232,9 @@ class Settings(BaseSettings):
     webhook_colours: PairSet = Field(default_factory=dict)
     # `node.stale=has stopped answering` - the words after the subject.
     webhook_titles: PairSet = Field(default_factory=dict)
+    # `node.stale=!` - what stands in front of it. A single `-` means none, for
+    # a channel that would rather not have emoji in it.
+    webhook_icons: PairSet = Field(default_factory=dict)
 
     firewall_backend: str | None = None
     firewall_rollback: int = Field(default=60, ge=0, le=3600)

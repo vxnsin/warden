@@ -59,15 +59,38 @@ def test_a_different_secret_does_not_produce_the_same_signature(event: Event):
 
 def test_discord_gets_an_embed_a_person_can_read(event: Event):
     embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
-    assert embed["description"] == "shop-api took 127.0.0.1:8080 on build-01"
+    assert embed["title"].endswith("shop-api")
+    assert embed["description"] == "took 127.0.0.1:8080 on build-01"
     assert embed["color"] == webhooks.LOOKS["port.registered"][0]
-    assert {"name": "project", "value": "shop", "inline": True} in embed["fields"]
+    assert {"name": "project", "value": "`shop`", "inline": True} in embed["fields"]
+    assert embed["footer"]["text"].endswith("build-01")
+
+
+def test_discord_does_not_repeat_the_heading_in_a_field(event: Event):
+    """A message that says the service name three times reads like a form."""
+    embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
+    assert all(field["name"] != "service" for field in embed["fields"])
+    assert "node" not in [field["name"] for field in embed["fields"]]
 
 
 def test_slack_says_it_in_text_as_well_as_blocks(event: Event):
     payload = body_of(event, shape=webhooks.SLACK)
     assert payload["text"] == webhooks.sentence(event, "build-01")
-    assert payload["blocks"][0]["text"]["type"] == "mrkdwn"
+    blocks = payload["attachments"][0]["blocks"]
+    assert blocks[0]["text"]["type"] == "mrkdwn"
+    assert "shop-api" in blocks[0]["text"]["text"]
+
+
+def test_slack_gets_the_colour_it_could_never_get_from_a_block(event: Event):
+    """A bare `blocks` message has nowhere to put a colour. An attachment does."""
+    attachment = body_of(event, shape=webhooks.SLACK)["attachments"][0]
+    assert attachment["color"] == "#4c9a5b"
+
+
+def test_slack_says_when_in_the_readers_own_timezone(event: Event):
+    context = body_of(event, shape=webhooks.SLACK)["attachments"][0]["blocks"][-1]
+    assert context["type"] == "context"
+    assert "<!date^" in context["elements"][0]["text"]
 
 
 def test_teams_gets_an_adaptive_card(event: Event):
@@ -75,7 +98,15 @@ def test_teams_gets_an_adaptive_card(event: Event):
     assert attachment["contentType"] == "application/vnd.microsoft.card.adaptive"
     card = attachment["content"]
     assert card["type"] == "AdaptiveCard"
-    assert card["body"][0]["text"] == webhooks.sentence(event, "build-01")
+    assert card["body"][1]["text"] == "took 127.0.0.1:8080 on build-01"
+
+
+def test_the_teams_header_takes_the_only_colour_a_card_understands(event: Event):
+    """A card cannot be given a hex colour, so the band takes a named tone."""
+    card = body_of(event, shape=webhooks.TEAMS)["attachments"][0]["content"]
+    header = card["body"][0]
+    assert header["type"] == "Container"
+    assert header["style"] == webhooks.GOOD
 
 
 def test_every_shape_carries_the_port(event: Event):
@@ -162,13 +193,13 @@ def test_the_colour_and_the_words_are_named_apart():
     """Setting one must not disturb the other."""
     from warden.core.webhooks import looks
 
-    colour, words = looks(node_event("stale"), {"node.stale": "#123456"}, None)
-    assert colour == 0x123456
-    assert words == "has gone quiet"
+    look = looks(node_event("stale"), {"node.stale": "#123456"}, None)
+    assert look.colour == 0x123456
+    assert look.words == "has gone quiet"
 
-    colour, words = looks(node_event("stale"), None, {"node.stale": "gone"})
-    assert colour == 0xA8434A
-    assert words == "gone"
+    look = looks(node_event("stale"), None, {"node.stale": "gone"})
+    assert look.colour == 0xA8434A
+    assert look.words == "gone"
 
 
 def test_the_plain_shape_carries_neither_because_it_carries_the_event():
@@ -178,3 +209,53 @@ def test_the_plain_shape_carries_neither_because_it_carries_the_event():
     )
     assert b"gone" not in body
     assert b'"action":"stale"' in body
+
+
+def test_every_event_has_an_icon_of_its_own():
+    assert len({look.icon for look in webhooks.LOOKS.values()}) > 8
+    assert all(look.icon for look in webhooks.LOOKS.values())
+
+
+def test_an_icon_can_be_named_one_event_at_a_time():
+    look = webhooks.looks(node_event("stale"), None, None, {"node.stale": "!!"})
+    assert look.icon == "!!"
+    assert webhooks.looks(node_event("joined"), None, None, {"node.stale": "!!"}).icon != "!!"
+
+
+def test_an_icon_can_be_turned_off_for_a_channel_that_would_rather_not():
+    look = webhooks.looks(node_event("stale"), None, None, {"node.stale": webhooks.NOTHING})
+    assert look.icon == ""
+    assert webhooks._headline(look, node_event("stale")) == "build-01"
+
+
+def test_the_icon_reaches_all_three_shapes():
+    for shape in (webhooks.DISCORD, webhooks.SLACK, webhooks.TEAMS):
+        body, _ = webhooks.render(
+            node_event(), node="hub", shape=shape, icons={"node.stale": "SEEN"}
+        )
+        assert b"SEEN" in body
+
+
+def test_a_card_with_no_icon_has_no_column_for_one():
+    body, _ = webhooks.render(
+        node_event(),
+        node="hub",
+        shape=webhooks.TEAMS,
+        icons={"node.stale": webhooks.NOTHING},
+    )
+    card = json.loads(body)["attachments"][0]["content"]
+    columns = card["body"][0]["items"][0]["columns"]
+    assert [column["width"] for column in columns] == ["stretch"]
+
+
+def test_the_plain_shape_carries_no_icon_either():
+    body, _ = webhooks.render(
+        node_event(), node="hub", shape=webhooks.JSON, icons={"node.stale": "SEEN"}
+    )
+    assert b"SEEN" not in body
+
+
+def test_discord_names_the_event_once_rather_than_beside_the_subject(event: Event):
+    embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
+    assert embed["author"]["name"] == "port.registered"
+    assert "shop-api" not in embed["author"]["name"]
