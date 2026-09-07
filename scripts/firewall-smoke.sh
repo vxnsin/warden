@@ -91,13 +91,21 @@ echo "warden holds the ruleset; ufw goes only on confirm"
 
 say "and the same policy through iptables, which the older machines still use"
 apt-get -qq install -y --no-install-recommends iptables > /dev/null 2>&1 || true
-if command -v iptables-restore > /dev/null; then
-  warden firewall export --for iptables > /tmp/rules.v4
-  iptables-restore < /tmp/rules.v4
-  iptables-save > /tmp/back.txt
-  grep -q "dport 22" /tmp/back.txt
-  grep -q "ESTABLISHED,RELATED" /tmp/back.txt
-  echo "iptables took it and gave it back"
-else
+if ! command -v iptables-restore > /dev/null; then
   echo "no iptables here, skipping"
+  exit 0
 fi
+
+warden firewall export --for iptables > /tmp/rules.v4
+echo "warden wrote:"
+cat /tmp/rules.v4
+
+if ! iptables-restore < /tmp/rules.v4 2> /tmp/iptables.err; then
+  echo "iptables refused what warden wrote:" >&2
+  cat /tmp/iptables.err >&2
+  exit 1
+fi
+iptables-save > /tmp/back.txt
+grep -q "dport 22" /tmp/back.txt
+grep -q "ESTABLISHED,RELATED" /tmp/back.txt
+echo "iptables took it and gave it back"
