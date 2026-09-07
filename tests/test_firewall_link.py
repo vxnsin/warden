@@ -136,9 +136,11 @@ def test_doctor_says_when_the_pool_is_open_and_for_how_much_longer(tmp_path, mon
     with Store(where.database) as store:
         RuleStore(store).save(link.window(where, "10.0.0.0/8", 3600))
 
-    checks = _firewall(where)
-    assert [check.level for check in checks] == [WARN]
-    assert "the pool is open to 10.0.0.0/8" in checks[0].text
+    # Also a note about the rule not being applied yet, which is true and
+    # somebody else's test. This one is about the window.
+    said = [check for check in _firewall(where) if check.level == WARN]
+    assert len(said) == 1
+    assert "the pool is open to 10.0.0.0/8" in said[0].text
 
 
 def test_doctor_counts_what_the_registry_opened(tmp_path, monkeypatch):
@@ -152,9 +154,8 @@ def test_doctor_counts_what_the_registry_opened(tmp_path, monkeypatch):
             link.rule_for(service(), source="10.0.0.0/8", settings=where)
         )
 
-    checks = _firewall(where)
-    assert [check.level for check in checks] == [NOTE]
-    assert "1 rule opened for a registered service" in checks[0].text
+    said = [check.text for check in _firewall(where) if check.level == NOTE]
+    assert any("1 rule opened for a registered service" in one for one in said)
 
 
 def test_doctor_says_nothing_about_a_machine_with_no_rules(tmp_path):

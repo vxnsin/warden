@@ -925,6 +925,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         backend = _backend()
         held = rules.list()
         waiting = guard.armed(snapshots)
+        drifted = guard.pending(held, snapshots)
         return FirewallStatus(
             backend=backend.kind,
             available=backend.available(),
@@ -934,6 +935,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             live=len(firewall.Policy(rules=held).live(datetime.now(UTC))),
             from_registry=sum(1 for rule in held if rule.origin is firewall.Origin.REGISTRY),
             rollback_at=waiting.deadline if waiting else None,
+            pending=drifted.count,
+            applied_at=drifted.applied_at,
         )
 
     @firewall_reads.get("/rules", summary="Every rule this machine holds")

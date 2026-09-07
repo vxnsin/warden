@@ -8,6 +8,8 @@ from warden import theme
 from warden.errors import WardenError
 from warden.firewall.model import Rule
 from warden.models import (
+    FirewallStatus,
+    FleetFirewall,
     FleetListener,
     FleetListeners,
     FleetPool,
@@ -16,6 +18,7 @@ from warden.models import (
     FleetServices,
     Listener,
     Node,
+    NodeFirewall,
     NodePool,
     PoolStatus,
     Registration,
@@ -31,6 +34,16 @@ from warden.tui import (
     WardenApp,
     _address,
     _lease,
+)
+
+FIREWALL = FirewallStatus(
+    backend="nftables",
+    available=True,
+    enabled=True,
+    remote=True,
+    rules=1,
+    live=1,
+    from_registry=1,
 )
 
 POOL = PoolStatus(start=8000, end=8004, size=5, reserved=[8004], allocated=2, available=2)
@@ -83,6 +96,9 @@ class StubClient:
 
     def nodes(self) -> list[Node]:
         return []
+
+    def firewall(self) -> FirewallStatus:
+        return FIREWALL
 
 
 def run_app(scenario, size=(120, 40), client=None, fleet=False) -> None:
@@ -154,6 +170,12 @@ class FleetStubClient(StubClient):
 
     def fleet_pool(self) -> FleetPool:
         return FLEET_POOL
+
+    def fleet_firewall(self) -> FleetFirewall:
+        return FleetFirewall(
+            firewalls=[NodeFirewall(node="build-01", **FIREWALL.model_dump())],
+            unreachable=[],
+        )
 
     def release(self, name: str, *, node: str | None = None) -> None:
         self.released.append((name, node))

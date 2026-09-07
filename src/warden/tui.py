@@ -307,6 +307,10 @@ class WardenApp(App[None]):
         # Left as they arrived rather than parsed: a hub shows a fleet that may
         # be running a newer warden than itself.
         self._rules: list[dict[str, object]] = []
+        # How many rules are written down and not in the kernel. Read off the
+        # firewall status rather than worked out here: the answer belongs to
+        # the machine holding the rules, which may not be this one.
+        self._drift = 0
         self._known: list[Node] = []
         # Not _nodes: that name belongs to Textual, for the widgets on screen.
         self._node_names: list[str] = []
@@ -785,16 +789,22 @@ class WardenApp(App[None]):
     def _load_rules(self) -> None:
         if not self.fleet:
             found = self.client.firewall_rules()
+            drift = self.client.firewall().pending
             self.call_from_thread(
-                self.show_rules, [rule.model_dump(mode="json") for rule in found]
+                self.show_rules, [rule.model_dump(mode="json") for rule in found], (), drift
             )
             return
         found = self.client.fleet_firewall_rules()
-        self.call_from_thread(self.show_rules, found.rules, found.unreachable)
+        drift = sum(one.pending for one in self.client.fleet_firewall().firewalls)
+        self.call_from_thread(self.show_rules, found.rules, found.unreachable, drift)
 
     def show_rules(
-        self, rows: list[dict[str, object]], unreachable: list[Unreachable] = ()
+        self,
+        rows: list[dict[str, object]],
+        unreachable: list[Unreachable] = (),
+        drift: int = 0,
     ) -> None:
+        self._drift = drift
         self._remember(rows, unreachable)
         rows = self._showing(rows)
         self._label()
@@ -819,6 +829,7 @@ class WardenApp(App[None]):
             )
         self._restore_cursor(table, row, len(rows))
 
+        drifted = self._drift
         borrowed = sum(1 for rule in rows if str(rule.get("origin")) == "registry")
         leased = sum(1 for rule in rows if rule.get("expires_at"))
         stats = Text()
@@ -830,6 +841,9 @@ class WardenApp(App[None]):
         if leased:
             stats.append(SEP, style=theme.VEIN_BRIGHT)
             stats.append(f"{leased} closing on their own", style=theme.SHRIEKER)
+        if drifted:
+            stats.append(SEP, style=theme.VEIN_BRIGHT)
+            stats.append(f"{drifted} not applied yet", style=theme.EMBER)
         self._say(self._missing(stats))
 
     def _load_nodes(self) -> None:

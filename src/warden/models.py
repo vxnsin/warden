@@ -293,6 +293,9 @@ class FirewallStatus(BaseModel):
     live: int
     from_registry: int
     rollback_at: datetime | None = None
+    # Rules written down that are not in the kernel, and the other way round.
+    pending: int = 0
+    applied_at: datetime | None = None
 
 
 class OpenRequest(BaseModel):

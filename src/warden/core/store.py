@@ -78,6 +78,15 @@ CREATE TABLE IF NOT EXISTS snapshots (
     reason  TEXT
 );
 
+-- One row or none: what is in the kernel right now, as far as warden knows.
+-- Written after an apply and deleted by a rollback, because what a snapshot
+-- puts back is a ruleset warden did not compose and cannot name.
+CREATE TABLE IF NOT EXISTS applied (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    at    TEXT NOT NULL,
+    names TEXT NOT NULL DEFAULT '[]'
+);
+
 -- One row or none: either a rollback is armed or it is not.
 CREATE TABLE IF NOT EXISTS pending (
     id       INTEGER PRIMARY KEY CHECK (id = 1),
@@ -695,6 +704,37 @@ class Snapshots:
             return self._store._db.execute(
                 "SELECT * FROM snapshots ORDER BY id DESC LIMIT 1"
             ).fetchone()
+
+    def went_live(self, names: list[str]) -> None:
+        """Remember which rules were applied, so `pending` can be a real answer.
+
+        Without this, "has anything changed since the last apply" could only be
+        guessed from timestamps, and a rule taken away leaves no timestamp at
+        all.
+        """
+        with self._store._lock:
+            self._store._db.execute(
+                """
+                INSERT INTO applied (id, at, names) VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET at = excluded.at, names = excluded.names
+                """,
+                (_isoformat(datetime.now(UTC)), json.dumps(sorted(names))),
+            )
+            self._store._db.commit()
+
+    def live(self) -> tuple[datetime, list[str]] | None:
+        """When warden last applied, and what it applied. None if it has not."""
+        with self._store._lock:
+            row = self._store._db.execute("SELECT * FROM applied WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        return datetime.fromisoformat(row["at"]), list(json.loads(row["names"]))
+
+    def forget_live(self) -> None:
+        """After a rollback. What is in the kernel is a snapshot, not a ruleset."""
+        with self._store._lock:
+            self._store._db.execute("DELETE FROM applied WHERE id = 1")
+            self._store._db.commit()
 
     def arm(self, snapshot: int, deadline: datetime, reason: str | None = None) -> None:
         """Say that the firewall goes back at this moment unless told otherwise."""
