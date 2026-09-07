@@ -70,3 +70,28 @@ def test_two_wardens_on_one_machine_may_both_use_loopback():
 def test_a_local_node_needs_no_advertise_at_all():
     settings = Settings(port=7020, upstream="http://127.0.0.1:7010")
     assert settings.advertise_url == "http://127.0.0.1:7020"
+
+
+def test_a_set_of_ports_can_come_from_the_environment(monkeypatch: pytest.MonkeyPatch):
+    """The shape the readme documents, which pydantic-settings ate for years.
+
+    Anything set-shaped is 'complex' to pydantic-settings, so it tries
+    json.loads on the value before the parser written for this shape sees it.
+    """
+    monkeypatch.setenv("WARDEN_RESERVED", "8080,9000-9002")
+    assert sorted(Settings().reserved) == [8080, 9000, 9001, 9002]
+
+
+def test_a_set_of_events_can_come_from_the_environment(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("WARDEN_WEBHOOK_EVENTS", "registered,released")
+    assert sorted(Settings().webhook_events) == ["registered", "released"]
+
+
+def test_a_set_of_networks_can_come_from_the_environment(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("WARDEN_FIREWALL_ALLOW_FROM", "10.0.0.0/8, 192.168.1.0/24")
+    assert sorted(Settings().firewall_allow_from) == ["10.0.0.0/8", "192.168.1.0/24"]
+
+
+def test_a_single_value_still_works_without_a_comma(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("WARDEN_RESERVED", "8080")
+    assert Settings().reserved == {8080}

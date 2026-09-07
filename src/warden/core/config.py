@@ -15,6 +15,7 @@ from platformdirs import user_config_path, user_data_path
 from pydantic import BeforeValidator, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
@@ -42,7 +43,10 @@ def parse_ports(value: object) -> object:
     return ports
 
 
-PortSet = Annotated[set[int], BeforeValidator(parse_ports)]
+# NoDecode, or pydantic-settings tries json.loads on the environment variable
+# before any of this runs, and `WARDEN_RESERVED=8080,9000-9010` never reaches
+# the parser written for exactly that shape.
+PortSet = Annotated[set[int], NoDecode, BeforeValidator(parse_ports)]
 
 
 def parse_words(value: object) -> object:
@@ -52,7 +56,7 @@ def parse_words(value: object) -> object:
     return {word.strip() for word in value.replace(";", ",").split(",") if word.strip()}
 
 
-WordSet = Annotated[set[str], BeforeValidator(parse_words)]
+WordSet = Annotated[set[str], NoDecode, BeforeValidator(parse_words)]
 
 
 def parse_networks(value: object) -> object:
@@ -62,7 +66,7 @@ def parse_networks(value: object) -> object:
     return {chunk.strip() for chunk in value.replace(";", ",").split(",") if chunk.strip()}
 
 
-NetworkSet = Annotated[set[str], BeforeValidator(parse_networks)]
+NetworkSet = Annotated[set[str], NoDecode, BeforeValidator(parse_networks)]
 
 
 def default_database() -> Path:

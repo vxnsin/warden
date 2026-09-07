@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 from warden.errors import FirewallError, NotPermittedError
 from warden.firewall.backends.base import Backend
-from warden.firewall.model import Action, Direction, Policy, Protocol, Rule
+from warden.firewall.model import Action, Direction, Policy, Protocol, Rule, runs, spelled
 
 TABLE = "warden"
 
@@ -28,8 +28,9 @@ TIMEOUT = 20.0
 def _ports(rule: Rule) -> str:
     if not rule.ports:
         return ""
-    ordered = sorted(rule.ports)
-    named = str(ordered[0]) if len(ordered) == 1 else "{ " + ", ".join(map(str, ordered)) + " }"
+    stretches = runs(rule.ports)
+    spoken = spelled(rule.ports, ", ")
+    named = spoken if len(stretches) == 1 else "{ " + spoken + " }"
     return f" {rule.protocol} dport {named}"
 
 

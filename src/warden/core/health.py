@@ -206,6 +206,43 @@ def _webhook(client: WardenClient) -> list[Check]:
     return checks
 
 
+def _firewall(settings: Settings) -> list[Check]:
+    """What the registry has been allowed to open, and for how much longer.
+
+    A development window that outlives the afternoon it was opened for is the
+    thing this is here to make impossible to forget.
+    """
+    from warden.core.store import RuleStore, Store
+    from warden.firewall.link import DEV_MODE
+    from warden.firewall.model import Origin
+
+    try:
+        with Store(settings.database) as store:
+            rules = RuleStore(store).list()
+    except Exception:  # a database that will not open is the store's news, not this
+        return []
+    if not rules:
+        return []
+
+    checks = []
+    theirs = [rule for rule in rules if rule.origin is Origin.REGISTRY]
+    window = next((rule for rule in rules if rule.service == DEV_MODE), None)
+    if window is not None and window.expires_at is not None:
+        checks.append(
+            Check(
+                WARN,
+                f"the pool is open to {window.source} for another "
+                f"{theme.until(window.expires_at)} - `warden firewall delete dev-mode`",
+            )
+        )
+        theirs = [rule for rule in theirs if rule.service != DEV_MODE]
+    if theirs:
+        checks.append(
+            Check(NOTE, f"{_many(len(theirs), 'rule')} opened for a registered service")
+        )
+    return checks
+
+
 def _updates(client: WardenClient) -> list[Check]:
     try:
         status = client.update_status()
@@ -228,6 +265,7 @@ def examine(client: WardenClient, settings: Settings) -> list[Check]:
     checks.extend(_pool(client))
     checks.extend(_holders(client))
     checks.extend(_webhook(client))
+    checks.extend(_firewall(settings))
     checks.extend(_nodes(client, health))
     checks.extend(_updates(client))
     return checks
