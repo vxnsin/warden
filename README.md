@@ -46,6 +46,7 @@ pip and a checkout.
 | **Says it as it happens** | A live event stream, and webhooks for Discord, Slack, Teams or your own endpoint. [Events and webhooks](https://github.com/vxnsin/warden/wiki/Events-and-webhooks) |
 | **Writes your proxy config** | `warden export caddy` turns the registry into a Caddyfile. [Reverse proxy](https://github.com/vxnsin/warden/wiki/Reverse-proxy) |
 | **Reads a project file** | `warden.toml` says which ports a project needs; `warden apply` makes it true. [Projects](https://github.com/vxnsin/warden/wiki/Projects) |
+| **Decides what may cross** | A firewall over nftables, iptables, pf or Windows, where every change undoes itself unless you confirm it. [Firewall](https://github.com/vxnsin/warden/wiki/Firewall) |
 | **Spans machines** | One hub, many wardens, one view. [Cluster](https://github.com/vxnsin/warden/wiki/Cluster) |
 | **Answers for itself** | `warden doctor` replaces four commands and a guess. [Troubleshooting](https://github.com/vxnsin/warden/wiki/Troubleshooting) |
 
@@ -147,6 +148,44 @@ written in place, and no proxy is reloaded.
 [Reverse proxy](https://github.com/vxnsin/warden/wiki/Reverse-proxy) has the
 rest.
 
+### Decide what may cross
+
+warden also holds the machine's firewall, in whatever the machine actually
+uses — nftables, iptables, pf on macOS and the BSDs, Windows Defender Firewall:
+
+```sh
+$ warden firewall allow ssh --from 10.0.0.0/8
+$ warden firewall apply
+12 rules applied
+rolling back in 60s unless you run `warden firewall confirm`
+```
+
+**Every change undoes itself unless you confirm it.** A snapshot is taken
+first, the rollback is armed second, and the change applied third. The
+watchdog runs detached, so it outlives the ssh session that armed it — a rule
+that locks you out is a minute of waiting rather than a drive to the machine.
+
+`warden firewall adopt` takes over from ufw or firewalld: it reads their rules,
+shows them, applies them as its own, and turns the other one off only once you
+confirm. Until then it is still enabled, so rolling back returns the machine
+exactly as it was. Anything it cannot translate is named before you decide —
+a rule quietly lost here is a door quietly left open.
+
+**And because the registry is in the same program, a rule can belong to a
+service rather than to a number:**
+
+```sh
+$ warden firewall open shop-api      # the port the registry handed out
+$ warden firewall dev-mode --for 2   # the whole pool, for the afternoon
+```
+
+Both close themselves: the first when the service's lease lapses, the second
+when its clock runs out. Neither can reach a port warden does not hand out —
+`22` and `3389` are outside the pool, and stay there.
+
+[Firewall](https://github.com/vxnsin/warden/wiki/Firewall) has the whole of it,
+including the bounds a rule from the registry can never cross.
+
 ### Find out why it is not working
 
 ```sh
@@ -237,6 +276,7 @@ The wiki is the long form. This page is the tour.
 | [Projects](https://github.com/vxnsin/warden/wiki/Projects) | A `warden.toml` beside the code, and `warden apply` |
 | [Events and webhooks](https://github.com/vxnsin/warden/wiki/Events-and-webhooks) | Hearing about it as it happens, in chat or your own endpoint |
 | [Reverse proxy](https://github.com/vxnsin/warden/wiki/Reverse-proxy) | Turning the registry into a Caddyfile, nginx or Traefik |
+| [Firewall](https://github.com/vxnsin/warden/wiki/Firewall) | Deciding what may cross, and taking over from ufw or firewalld |
 | [Cluster](https://github.com/vxnsin/warden/wiki/Cluster) | Several machines, one hub that knows them all |
 | [Docker](https://github.com/vxnsin/warden/wiki/Docker) | The image, a compose file, and what a container can see |
 | [Updates](https://github.com/vxnsin/warden/wiki/Updates) | Knowing a new version is out, and rolling it across a fleet |
@@ -249,6 +289,7 @@ The wiki is the long form. This page is the tour.
 
 - **The registry binds to loopback and has no token by default.** Set
   `WARDEN_TOKEN` before binding it anywhere else.
+- **The registry cannot open a port by itself.** A rule that comes from it may only ever touch a port inside the pool, may only reach networks declared in advance, and closes when the service's lease does. `firewall_from_registry` is off until you turn it on.
 - **`WARDEN_ALLOW_KILL` is off on purpose.** Stopping processes over the API is
   a much bigger thing to hand out than a port number. `warden kill` on the
   command line acts locally and never asks the API.

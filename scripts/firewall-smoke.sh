@@ -88,3 +88,16 @@ PY
 say "and it is loaded, while ufw is still enabled"
 nft list ruleset > /tmp/now.txt; grep -q 'tcp dport 22' /tmp/now.txt
 echo "warden holds the ruleset; ufw goes only on confirm"
+
+say "and the same policy through iptables, which the older machines still use"
+apt-get -qq install -y --no-install-recommends iptables > /dev/null 2>&1 || true
+if command -v iptables-restore > /dev/null; then
+  warden firewall export --for iptables > /tmp/rules.v4
+  iptables-restore < /tmp/rules.v4
+  iptables-save > /tmp/back.txt
+  grep -q "dport 22" /tmp/back.txt
+  grep -q "ESTABLISHED,RELATED" /tmp/back.txt
+  echo "iptables took it and gave it back"
+else
+  echo "no iptables here, skipping"
+fi
