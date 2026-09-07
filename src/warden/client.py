@@ -16,8 +16,10 @@ from warden.errors import (
     UnknownServiceError,
     WardenError,
 )
+from warden.firewall.model import Rule
 from warden.models import (
     Event,
+    FirewallStatus,
     FleetListeners,
     FleetPool,
     FleetRegistration,
@@ -285,6 +287,52 @@ class WardenClient:
     def fleet_pool(self) -> FleetPool:
         """Every node's pool, and what the fleet has left altogether."""
         return FleetPool.model_validate(self._request("GET", "/v1/fleet/pool"))
+
+    def firewall(self) -> FirewallStatus:
+        """What that machine's firewall is, and whether it is about to undo itself."""
+        return FirewallStatus.model_validate(self._request("GET", "/v1/firewall"))
+
+    def firewall_rules(self, *, origin: str | None = None) -> list[Rule]:
+        """Every rule it holds, and where each one came from."""
+        params = {"origin": origin} if origin else None
+        said = self._request("GET", "/v1/firewall/rules", params=params)
+        return [Rule.model_validate(rule) for rule in said]
+
+    def firewall_open(
+        self, service: str, *, source: str = "", comment: str | None = None
+    ) -> Rule:
+        """Let through the port a registered service holds.
+
+        A name rather than a port: the registry knows which port that is and
+        how long it holds it for, so the rule inherits the lease and closes
+        when the service does. Bounded by the pool, by firewall_allow_from, and
+        by every other rule in firewall/bounds.py - and refused outright unless
+        that machine has allow_remote_firewall set.
+        """
+        body = {"service": service, "source": source, "comment": comment}
+        return Rule.model_validate(self._request("POST", "/v1/firewall/open", json=body))
+
+    def firewall_close(self, name: str) -> None:
+        """Take one rule back out."""
+        self._request("DELETE", f"/v1/firewall/rules/{name}")
+
+    def firewall_apply(self, *, rollback: int | None = None) -> dict[str, object]:
+        """Make the rules true on that machine, with a rollback armed.
+
+        Nothing is kept until `firewall_confirm`. A caller on another machine
+        that shuts the door on itself gets it opened again by the watchdog.
+        """
+        params = {"rollback": rollback} if rollback is not None else None
+        return dict(self._request("POST", "/v1/firewall/apply", params=params))
+
+    def firewall_confirm(self) -> int:
+        """Keep what was applied, and stop the rollback that is waiting."""
+        return int(self._request("POST", "/v1/firewall/confirm")["confirmed"])
+
+    def firewall_restore(self, snapshot: int | None = None) -> int:
+        """Put a snapshot back, whether or not one was waiting."""
+        params = {"snapshot": snapshot} if snapshot is not None else None
+        return int(self._request("POST", "/v1/firewall/restore", params=params)["restored"])
 
     def update_status(self) -> UpdateStatus:
         """Whether the warden you are talking to knows of a newer one."""

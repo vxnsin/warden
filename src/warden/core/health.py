@@ -217,15 +217,15 @@ def _firewall(settings: Settings) -> list[Check]:
     from warden.firewall.link import DEV_MODE
     from warden.firewall.model import Origin
 
+    checks = _who_may_change_it(settings)
     try:
         with Store(settings.database) as store:
             rules = RuleStore(store).list()
     except Exception:  # a database that will not open is the store's news, not this
-        return []
+        return checks
     if not rules:
-        return []
+        return checks
 
-    checks = []
     theirs = [rule for rule in rules if rule.origin is Origin.REGISTRY]
     window = next((rule for rule in rules if rule.service == DEV_MODE), None)
     if window is not None and window.expires_at is not None:
@@ -242,6 +242,26 @@ def _firewall(settings: Settings) -> list[Check]:
             Check(NOTE, f"{_many(len(theirs), 'rule')} opened for a registered service")
         )
     return checks
+
+
+def _who_may_change_it(settings: Settings) -> list[Check]:
+    """Whether the rules can be changed from somewhere else, and by whom.
+
+    A warden that listens beyond loopback, takes no token and will change its
+    own firewall on request is a way through the firewall, not a firewall.
+    """
+    if not settings.allow_remote_firewall:
+        return []
+    if settings.token is None and settings.host not in LOOPBACK:
+        return [
+            Check(
+                FAIL,
+                "the firewall can be changed over the API, this warden is reachable "
+                "from other machines, and it asks for no token - set one, or unset "
+                "allow_remote_firewall",
+            )
+        ]
+    return [Check(NOTE, "the firewall can be changed over the API by a token holder")]
 
 
 def _updates(client: WardenClient) -> list[Check]:

@@ -164,6 +164,10 @@ def _ask_about_the_firewall(answers: dict[str, object], current: Settings) -> No
     answers["firewall_rollback"] = typer.prompt(
         "Seconds to confirm a firewall change", default=current.firewall_rollback, type=int
     )
+    answers["allow_remote_firewall"] = typer.confirm(
+        "Let another machine change the rules over the API?",
+        default=current.allow_remote_firewall,
+    )
     if not typer.confirm(
         "Let the registry open its own ports?", default=current.firewall_from_registry
     ):

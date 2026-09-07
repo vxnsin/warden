@@ -240,6 +240,10 @@ class Settings(BaseSettings):
     # firewall.
     firewall_from_registry: bool = False
     firewall_allow_from: NetworkSet = Field(default_factory=set)
+    # Whether a caller over the API may change the rules at all. Separate from
+    # firewall_from_registry, which decides what a rule may be: this decides
+    # who may ask, and a machine that never wants to be asked says so once.
+    allow_remote_firewall: bool = False
 
     node: str = Field(default_factory=default_node)
     advertise: str | None = None
