@@ -11,7 +11,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Label, Static
+from textual.widgets import Button, DataTable, Label, Static, Tab, Tabs
 
 from warden import theme
 from warden.client import WardenClient
@@ -33,18 +33,15 @@ COLUMNS = {
     PORTS: ("#", "PORT", "PROTO", "PROCESS", "PID", "USER", "ADDRESS", "WARDEN"),
     RULES: ("#", "RULE", "DIR", "ACTION", "WHAT", "FROM", "ORIGIN", "UNTIL"),
 }
-HEADINGS = {
-    SERVICES: "REGISTERED SERVICES",
-    PORTS: "LISTENING PORTS",
-    RULES: "FIREWALL RULES",
-}
+# What the tab bar calls each view. The bar is the heading.
+TABS = {SERVICES: "Services", PORTS: "Ports", RULES: "Firewall"}
 
 SEP = "  ~  "
 
 # What `d` does in each view. Nothing, where a rule is not something to take
 # away from under a cursor: closing one is `warden firewall delete`, and it is
 # a decision with a ruleset behind it rather than a keypress.
-ACTS = {SERVICES: "release", PORTS: "stop", RULES: "-"}
+ACTS = {SERVICES: "release", PORTS: "stop", RULES: ""}
 
 # The same colours the command line gives them.
 RULE_ACTIONS = {"allow": theme.MOSS, "deny": theme.EMBER, "reject": theme.SHRIEKER}
@@ -93,6 +90,14 @@ Screen {
     text-style: bold;
     height: auto;
 }
+
+/* The same bar the setup screen has, so the two screens look like one program. */
+Tabs { background: $sculk; height: 2; }
+Tabs > #tabs-scroll { height: 2; }
+Tabs > #tabs-list { min-height: 1; }
+Tab { color: $dim; padding: 0 2; }
+Tab.-active { color: $glow; text-style: bold; }
+Underline > .underline--bar { color: $glow_dim; background: $vein; }
 
 DataTable {
     height: 1fr;
@@ -211,6 +216,8 @@ class WardenApp(App[None]):
         # Textual gives tab to focus movement by default; there is only one
         # focusable widget here, so the view switch is the better use for it.
         Binding("tab", "switch", "Switch view", priority=True),
+        Binding("ctrl+right", "switch", "Next view", show=False, priority=True),
+        Binding("ctrl+left", "back", "Previous view", show=False, priority=True),
         Binding("n", "node", "Filter by node"),
         Binding("r", "refresh", "Reload"),
         Binding("d", "act", "Release/stop"),
@@ -245,7 +252,8 @@ class WardenApp(App[None]):
         with Vertical(id="shell"):
             yield Static(theme.banner_text(), id="banner")
             yield Static("", id="tagline")
-            yield Static(HEADINGS[SERVICES], id="section")
+            yield Tabs(*(Tab(TABS[view], id=f"view-{view}") for view in VIEWS), id="views")
+            yield Static("", id="section")
             yield DataTable(id="rows", cursor_type="row")
             yield Static("", id="stats")
             yield Static("", id="hints")
@@ -265,9 +273,12 @@ class WardenApp(App[None]):
         return (first, "NODE", *rest) if self.fleet else (first, *rest)
 
     def _heading(self) -> str:
-        if not self.fleet:
-            return HEADINGS[self.view]
-        return f"{HEADINGS[self.view]}{SEP}{(self.only or 'fleet').upper()}"
+        """What the tab bar does not already say: whose machines these are.
+
+        The bar names the view, so repeating it underneath would be the same
+        word twice with nothing between them.
+        """
+        return (self.only or "fleet").upper() if self.fleet else ""
 
     def _lay_out(self) -> None:
         table = self.query_one(DataTable)
@@ -281,20 +292,39 @@ class WardenApp(App[None]):
         said = Text(f"{theme.TAGLINE}{SEP}{source}{SEP}", style=theme.BONE_DIM)
         said.append_text(theme.byline())
         self.query_one("#tagline", Static).update(said)
-        self.query_one("#section", Static).update(self._heading())
+        heading = self._heading()
+        section = self.query_one("#section", Static)
+        section.update(heading)
+        # An empty heading is a blank row rather than nothing, and on a small
+        # terminal that row is a row of the table.
+        section.display = bool(heading)
         hints = [
             ("up/down/j/k", "move"),
             ("tab", VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]),
             ("r", "reload"),
-            ("d", ACTS[self.view]),
             ("q", "quit"),
         ]
+        if ACTS[self.view]:
+            hints.insert(3, ("d", ACTS[self.view]))
         if self.fleet:
             hints.insert(2, ("n", self.only or "every node"))
         self.query_one("#hints", Static).update(_hints(*hints))
 
     def action_switch(self) -> None:
-        self.view = VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]
+        self._step(1)
+
+    def action_back(self) -> None:
+        self._step(-1)
+
+    def _step(self, by: int) -> None:
+        """The bar is what holds the view; moving it is what changes it."""
+        self.query_one(Tabs).active = f"view-{VIEWS[(VIEWS.index(self.view) + by) % len(VIEWS)]}"
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        chosen = str(event.tab.id).removeprefix("view-")
+        if chosen == self.view:
+            return
+        self.view = chosen
         self._services = []
         self._listeners = []
         self._rules = []

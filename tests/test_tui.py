@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, Static, Tabs
 
 from warden import theme
 from warden.errors import WardenError
@@ -240,18 +240,55 @@ def test_the_banner_gives_way_to_the_table_on_a_short_terminal():
     run_app(scenario, size=(120, BANNER_MIN_HEIGHT - 1))
 
 
+def showing(app: WardenApp) -> str:
+    """Which tab the bar has underlined."""
+    return str(app.query_one(Tabs).active_tab.label)
+
+
 def test_tab_steps_through_the_views_and_comes_back_round():
     async def scenario(app: WardenApp, pilot) -> None:
         assert app.view == SERVICES
-        assert str(app.query_one("#section", Static).content) == "REGISTERED SERVICES"
+        assert showing(app) == "Services"
         await pilot.press("tab")
         assert app.view == PORTS
-        assert str(app.query_one("#section", Static).content) == "LISTENING PORTS"
+        assert showing(app) == "Ports"
         await pilot.press("tab")
         assert app.view == RULES
-        assert str(app.query_one("#section", Static).content) == "FIREWALL RULES"
+        assert showing(app) == "Firewall"
         await pilot.press("tab")
         assert app.view == SERVICES
+        assert showing(app) == "Services"
+
+    run_app(scenario)
+
+
+def test_the_bar_can_be_stepped_backwards_as_well():
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("ctrl+left")
+        assert app.view == RULES
+        await pilot.press("ctrl+right")
+        assert app.view == SERVICES
+
+    run_app(scenario)
+
+
+def test_choosing_a_tab_is_what_changes_the_view():
+    """The bar holds it, so clicking one and pressing tab cannot disagree."""
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        app.query_one(Tabs).active = "view-rules"
+        await pilot.pause()
+        assert app.view == RULES
+        assert str(app.query_one(DataTable).columns and True)
+
+    run_app(scenario)
+
+
+def test_the_heading_says_whose_machines_rather_than_which_view():
+    """The bar already names the view; saying it twice is saying it twice."""
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        assert str(app.query_one("#section", Static).content) == ""
 
     run_app(scenario)
 
