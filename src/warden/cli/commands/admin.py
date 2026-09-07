@@ -23,6 +23,7 @@ from warden.cli.shared import (
     app,
     console,
     errors,
+    redacted,
 )
 from warden.core import autostart, config, health, store, webhooks
 from warden.core.config import Settings
@@ -31,7 +32,11 @@ from warden.errors import WardenError
 ORDER = 10
 
 
-SECRETS = {"token", "cluster_token"}
+SECRETS = {"token", "cluster_token", "webhook_secret"}
+
+# Not a secret in itself, but its path is: anyone holding the whole address can
+# post as you. Shown cut back to its host, the way it is everywhere else.
+ADDRESSES = {"webhook"}
 
 # The full annotations, so a set of ports keeps the parser that turns
 # "8080,9000-9010" into one.
@@ -48,6 +53,8 @@ ORIGIN_COLOURS = {
 def _shown(field: str, value: object) -> Text:
     if field in SECRETS and value:
         return Text("set", style=theme.MOSS)
+    if field in ADDRESSES and value:
+        return Text(redacted(str(value)) or "set", style=theme.BONE)
     if value is None or value == "" or value == set():
         return Text("-", style=theme.BONE_DIM)
     if isinstance(value, set):

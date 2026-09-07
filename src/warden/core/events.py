@@ -30,12 +30,18 @@ TIMEOUT = 10.0
 
 
 def redacted(url: str | None) -> str | None:
-    """A webhook address is a credential, and the path is the secret half."""
+    """A webhook address is a credential, and the path is the secret half.
+
+    Built from the host rather than the netloc on purpose: a netloc carries
+    `user:password@` along with it, and this is the one function whose whole
+    job is not to show the secret parts.
+    """
     if not url:
         return None
     parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}" + ("/..." if parts.path.strip("/") else "")
-
+    host = parts.hostname or ""
+    where = f"{host}:{parts.port}" if parts.port else host
+    return f"{parts.scheme}://{where}" + ("/..." if parts.path.strip("/") else "")
 
 class EventBus:
     """One event in, everyone who is listening out."""

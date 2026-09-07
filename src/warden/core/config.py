@@ -6,6 +6,7 @@ import re
 import socket
 import tomllib
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlparse
@@ -98,8 +99,19 @@ def write(values: Mapping[str, object]) -> Path:
     lines = ["# Written by `warden setup`. `warden settings` edits it.", ""]
     lines += [f"{key} = {_toml(value)}" for key, value in kept.items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _only_ours(path)
     return path
 
+
+def _only_ours(path: Path) -> None:
+    """This file holds the API token, the cluster token and a signing secret.
+
+    Written with the usual default it would be readable by every account on the
+    machine. On Windows the profile's own permissions already do this, and
+    chmod there is a no-op rather than a mistake.
+    """
+    with suppress(OSError):
+        path.chmod(0o600)
 
 def _toml(value: object) -> str:
     if isinstance(value, bool):

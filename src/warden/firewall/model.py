@@ -5,10 +5,18 @@ from __future__ import annotations
 import ipaddress
 from datetime import datetime
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
-from warden.models import Name
+from warden.models import Name, Plain
 
 
 class Direction(StrEnum):
@@ -43,6 +51,11 @@ class Origin(StrEnum):
     CATALOGUE = "catalogue"
 
 
+# An interface name, and nothing that could be read as another word.
+Interface = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,31}$", strip_whitespace=True)
+]
+
 ANYWHERE = "any"
 
 
@@ -58,12 +71,12 @@ class Rule(BaseModel):
     ports: set[int] = Field(default_factory=set)
     source: str = ANYWHERE
     destination: str = ANYWHERE
-    interface: str | None = None
+    interface: Interface | None = None
     origin: Origin = Origin.MANUAL
     # Only ever set for a rule that borrowed a registration's lease.
-    service: str | None = None
+    service: Name | None = None
     expires_at: datetime | None = None
-    comment: str | None = None
+    comment: Plain | None = None
     enabled: bool = True
 
     @field_validator("source", "destination")

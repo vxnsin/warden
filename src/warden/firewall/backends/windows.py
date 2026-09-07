@@ -11,6 +11,7 @@ partway, which is the same promise made by other means.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -88,8 +89,13 @@ class Windows(Backend):
 
     def snapshot(self) -> str:
         """A policy file, which is what Windows can actually give back."""
-        where = Path(tempfile.gettempdir()) / "warden-firewall-before.wfw"
-        where.unlink(missing_ok=True)
+        # A fresh, unguessable path rather than a known one: this file is
+        # imported back as firewall policy, so anything able to write it first
+        # would be choosing the rules.
+        handle, path = tempfile.mkstemp(prefix="warden-firewall-", suffix=".wfw")
+        os.close(handle)
+        where = Path(path)
+        where.unlink(missing_ok=True)  # netsh writes it itself, and wants it gone
         self._run(
             ["netsh", "advfirewall", "export", str(where)], "reading the current policy"
         )
