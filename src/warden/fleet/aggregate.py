@@ -480,6 +480,22 @@ async def open_on(
     return {**response.json(), "node": node_name}
 
 
+async def write_on(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    node_name: str,
+    payload: dict[str, object],
+    *,
+    require_https: bool = False,
+) -> dict[str, object]:
+    """Write a rule down on one node, in that node's own words."""
+    response = await _relay(
+        http, nodes, node_name, "POST", "/v1/firewall/rules",
+        require_https=require_https, json=payload,
+    )
+    return {**response.json(), "node": node_name}
+
+
 async def close_on(
     http: httpx.AsyncClient,
     nodes: list[Node],

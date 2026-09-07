@@ -26,7 +26,7 @@ from warden.core.config import Settings
 from warden.core.events import EventBus
 from warden.core.store import RuleStore, Snapshots, Store
 from warden.errors import NotPermittedError, WardenError
-from warden.firewall import guard, link
+from warden.firewall import catalogue, guard, link
 from warden.firewall import model as firewall
 from warden.firewall.backends import base
 from warden.fleet import aggregate
@@ -55,6 +55,7 @@ from warden.models import (
     PoolStatus,
     Registration,
     RegistrationRequest,
+    RuleRequest,
     UpdateResult,
     UpdateStatus,
     WebhookStatus,
@@ -586,6 +587,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 require_https=settings.require_https,
             )
 
+    @fleet_writes.post(
+        "/firewall/{node}/rules",
+        summary="Write a rule down on one named node",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    async def write_there(
+        node: str,
+        asked: RuleRequest,
+        rules: Rules,
+        fleet: FleetDep,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, object]:
+        if node == settings.node:
+            may_change_the_firewall()
+            return {**firewall_write(asked, rules).model_dump(mode="json"), "node": node}
+        async with aggregate.relaying(authorization) as http:
+            return await aggregate.write_on(
+                http,
+                fleet.nodes(),
+                node,
+                asked.model_dump(mode="json"),
+                require_https=settings.require_https,
+            )
+
     @fleet_writes.delete(
         "/firewall/{node}/rules/{name}",
         summary="Take one rule back out on one named node",
@@ -896,6 +921,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "name the network to open to - this machine allows "
             + (", ".join(allowed) if allowed else "none")
         )
+
+    @firewall_writes.post(
+        "/rules",
+        summary="Write a rule down by hand",
+        responses={status.HTTP_422_UNPROCESSABLE_ENTITY: {"model": ErrorResponse}},
+    )
+    def firewall_write(asked: RuleRequest, rules: Rules) -> firewall.Rule:
+        # Through `catalogue.rule_for`, the same words the command line reads,
+        # so `ssh` means the same thing typed as it does asked for.
+        rule = catalogue.rule_for(
+            asked.what,
+            action=firewall.Action(asked.action),
+            source=asked.source,
+            direction=firewall.Direction(asked.direction),
+            protocol=asked.protocol,
+            comment=asked.comment,
+        )
+        rules.save(rule)
+        return rule
 
     @firewall_writes.delete(
         "/rules/{name}",

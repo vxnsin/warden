@@ -232,25 +232,12 @@ def _rule_from(
     comment: str | None,
 ) -> firewall.Rule:
     """A port, a port range, or a name out of the catalogue."""
-    if what.isdigit():
-        ports = {int(what)}
-        kind = firewall.Protocol(protocol or "tcp")
-        origin = firewall.Origin.MANUAL
-        name = f"{action}-{what}"
-    else:
-        kind, ports = catalogue.look_up(what)
-        if protocol:
-            kind = firewall.Protocol(protocol)
-        origin = firewall.Origin.CATALOGUE
-        name = f"{action}-{what.lower()}"
-    return firewall.Rule(
-        name=name,
-        direction=direction,
+    return catalogue.rule_for(
+        what,
         action=action,
-        protocol=kind,
-        ports=ports,
         source=source,
-        origin=origin,
+        direction=direction,
+        protocol=protocol,
         comment=comment,
     )
 

@@ -24,6 +24,11 @@ process runs, and goes back when it exits.
 
 <img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/tui.svg" alt="The warden dashboard" width="900">
 
+Four tabs — services, ports, firewall rules, nodes — and it is not read-only:
+`a` registers a service or writes a firewall rule, `d` releases, stops, closes
+or forgets whatever the cursor is on, and it asks first every time. With
+`--all` it does the same over a whole fleet, on the node you choose.
+
 ## Install
 
 ```sh
@@ -319,9 +324,9 @@ WARDEN_UPSTREAM=http://hub:7010 WARDEN_ADVERTISE=http://build-01:7010 warden ser
 Each warden still hands out its own ports and never waits on the hub. The hub
 adds one view over all of them: `warden ls --all`, `warden pool --all`,
 `warden firewall list --all`, `warden tui --all`, and a node that did not answer
-is named rather than quietly left out. The dashboard has three tabs
-across the top - services, ports and firewall rules - the same bar the setup
-screen has.
+is named rather than quietly left out. The dashboard has four tabs
+across the top - services, ports, firewall rules and nodes - the same bar the
+setup screen has, and `a` and `d` add and take away in whichever one you are in.
 [Cluster](https://github.com/vxnsin/warden/wiki/Cluster) has the tokens, the
 trust rules and what happens when a machine goes quiet.
 
