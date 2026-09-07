@@ -108,3 +108,30 @@ def test_asking_what_manages_this_machine_answers_rather_than_raising():
     found = managing()
     assert isinstance(found, list)
     assert all(name in (UFW, FIREWALLD) for name in found)
+
+
+def test_the_v6_twin_of_a_rule_is_not_a_second_rule():
+    """ufw lists v4 and v6 apart; warden's table is `inet`, which is both."""
+    twinned = """Status: active
+[ 1] 22/tcp                     ALLOW IN    Anywhere
+[ 2] 3389                       DENY IN     Anywhere
+[ 3] 22/tcp (v6)                ALLOW IN    Anywhere (v6)
+[ 4] 3389 (v6)                  DENY IN     Anywhere (v6)
+"""
+    reading = from_ufw(twinned)
+    assert [rule.name for rule in reading.rules] == [
+        "allow-22",
+        "deny-3389",
+        "deny-3389-2",
+    ]
+
+
+def test_two_rules_that_differ_only_by_source_are_both_kept():
+    """Deduplication must not swallow a rule that is genuinely different."""
+    reading = from_ufw(
+        "Status: active\n"
+        "[ 1] 22/tcp   ALLOW IN    10.0.0.0/8\n"
+        "[ 2] 22/tcp   ALLOW IN    192.168.0.0/16\n"
+    )
+    assert len(reading.rules) == 2
+    assert {rule.source for rule in reading.rules} == {"10.0.0.0/8", "192.168.0.0/16"}

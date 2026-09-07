@@ -29,9 +29,10 @@ test -z "$(nft list ruleset)"
 say "nobody confirms, so it rolls itself back"
 warden firewall allow 8080 > /dev/null
 warden firewall apply --yes --rollback 3
-nft list ruleset | grep -q 'tcp dport 8080'
+nft list ruleset > /tmp/now.txt; grep -q 'tcp dport 8080' /tmp/now.txt
 sleep 8
-if nft list ruleset | grep -q 'tcp dport 8080'; then
+nft list ruleset > /tmp/now.txt
+if grep -q 'tcp dport 8080' /tmp/now.txt; then
   echo "the rollback never happened - this is the failure that loses servers" >&2
   nft list ruleset >&2
   exit 1
@@ -42,11 +43,12 @@ say "confirming keeps it"
 warden firewall apply --yes --rollback 3
 warden firewall confirm
 sleep 8
-nft list ruleset | grep -q 'tcp dport 8080'
+nft list ruleset > /tmp/now.txt; grep -q 'tcp dport 8080' /tmp/now.txt
 echo "still there, as asked"
 
 say "a refused apply leaves nothing armed"
-warden firewall status --json | grep -q '"rollback_at": null'
+warden firewall status --json > /tmp/status.json
+grep -q '"rollback_at": null' /tmp/status.json
 
 
 say "taking over from a real ufw"
@@ -84,5 +86,5 @@ print("22, 3389 and 8000:8100 from 10.0.0.0/8 all arrived")
 PY
 
 say "and it is loaded, while ufw is still enabled"
-nft list ruleset | grep -q 'tcp dport 22'
+nft list ruleset > /tmp/now.txt; grep -q 'tcp dport 22' /tmp/now.txt
 echo "warden holds the ruleset; ufw goes only on confirm"

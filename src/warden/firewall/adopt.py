@@ -133,19 +133,29 @@ def from_ufw(status: str) -> Reading:
             continue
 
         for protocol, ports in targets:
-            reading.rules.append(
-                Rule(
-                    name=_named(reading.rules, action, protocol, ports, source),
-                    direction=Direction.IN if row["way"] == "IN" else Direction.OUT,
-                    action=action,
-                    protocol=protocol,
-                    ports=ports,
-                    source=source,
-                    origin=Origin.ADOPTED,
-                    comment=f"from ufw: {line}",
-                )
+            rule = Rule(
+                name=_named(reading.rules, action, protocol, ports, source),
+                direction=Direction.IN if row["way"] == "IN" else Direction.OUT,
+                action=action,
+                protocol=protocol,
+                ports=ports,
+                source=source,
+                origin=Origin.ADOPTED,
+                comment=f"from ufw: {line}",
             )
+            # ufw lists v4 and v6 separately. warden's table is `inet`, which
+            # is both, so the twin is the same rule written twice.
+            if not _already(reading.rules, rule):
+                reading.rules.append(rule)
     return reading
+
+def _already(taken: list[Rule], rule: Rule) -> bool:
+    return any(
+        (other.direction, other.action, other.protocol, other.ports, other.source)
+        == (rule.direction, rule.action, rule.protocol, rule.ports, rule.source)
+        for other in taken
+    )
+
 
 def _named(
     taken: list[Rule], action: Action, protocol: Protocol, ports: set[int], source: str
