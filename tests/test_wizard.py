@@ -73,7 +73,7 @@ def test_only_the_signed_shape_is_asked_for_a_secret():
     async def scenario(app: Setup, pilot) -> None:
         assert app.query_one("#secret-field").display
         app.query_one("#webhook-format", Select).value = "discord"
-        await pilot.pause()
+        await settled(pilot)
         assert not app.query_one("#secret-field").display
 
     asking(scenario, settings(webhook="https://chat.example/hook", webhook_format="json"))
@@ -159,7 +159,7 @@ def test_saying_no_takes_a_webhook_back_off():
 def test_a_secret_is_not_kept_for_a_shape_that_does_not_sign():
     async def scenario(app: Setup, pilot) -> None:
         app.query_one("#webhook-format", Select).value = "teams"
-        await pilot.pause()
+        await settled(pilot)
         await pilot.press("ctrl+s")
 
     answers = asking(
