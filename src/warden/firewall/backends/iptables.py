@@ -36,6 +36,15 @@ UNITS = {1: "second", 60: "minute", 3600: "hour", 86400: "day"}
 
 def line(rule: Rule) -> str:
     """One rule, as iptables-restore would have written it."""
+    for said in (rule.source, rule.destination):
+        if ":" in said:
+            # `iptables-restore` is IPv4 and would refuse the whole table, which
+            # means every other rule with it. Better to name the one rule than
+            # to hand over a file that cannot load.
+            raise NotPermittedError(
+                f"{rule.name} names {said}, and iptables is IPv4 only - "
+                "nftables holds both families in one ruleset"
+            )
     parts = [f"-A {CHAINS[rule.direction]}"]
     if rule.interface:
         parts.append(f"{'-i' if rule.direction is Direction.IN else '-o'} {rule.interface}")
