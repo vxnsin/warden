@@ -253,14 +253,44 @@ def test_a_warden_left_on_loopback_is_not_asked_for_a_token():
 
 
 def test_the_events_already_chosen_start_ticked_and_the_others_do_not():
+    """Including a name written the way 0.2.0 wrote it."""
+
     async def scenario(app: Setup, pilot) -> None:
         chosen = app.query_one("#webhook-events", SelectionList)
-        assert sorted(chosen.selected) == ["expired", "registered"]
+        assert sorted(chosen.selected) == ["port.expired", "port.registered"]
 
     asking(
         scenario,
         settings(webhook="https://chat.example/hook", webhook_events={"registered", "expired"}),
     )
+
+
+def test_a_whole_scope_ticks_everything_in_it():
+    async def scenario(app: Setup, pilot) -> None:
+        chosen = app.query_one("#webhook-events", SelectionList)
+        assert sorted(chosen.selected) == [
+            "firewall.applied",
+            "firewall.confirmed",
+            "firewall.restored",
+            "firewall.rolled_back",
+        ]
+
+    asking(
+        scenario,
+        settings(webhook="https://chat.example/hook", webhook_events={"firewall.*"}),
+    )
+
+
+def test_the_screen_offers_everything_warden_can_say():
+    async def scenario(app: Setup, pilot) -> None:
+        from warden.core.happenings import NAMES
+
+        offered = {
+            option.value for option in app.query_one("#webhook-events", SelectionList).options
+        }
+        assert offered == set(NAMES)
+
+    asking(scenario, settings(webhook="https://chat.example/hook"))
 
 
 def test_a_narrow_terminal_puts_the_label_above_the_field_it_names():

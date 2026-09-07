@@ -202,22 +202,52 @@ class Node(BaseModel):
         return f"{self.pool_start}-{self.pool_end}"
 
 
+PORT = "port"
+NODE = "node"
+FIREWALL = "firewall"
+
+SCOPES = (PORT, NODE, FIREWALL)
+
+
 class Event(BaseModel):
-    """Something that happened to a port, kept after it stopped being true."""
+    """Something that happened, kept after it stopped being true.
+
+    `scope` says what kind of thing it happened to and `action` what happened.
+    They are two fields rather than one string so that a reader written against
+    0.2.0, which only knew about ports and matched on `action`, keeps working.
+
+    The port fields stay where they were for the same reason. Anything a scope
+    needs that they cannot hold goes in `body`, which is why a node joining and
+    a ruleset being applied both fit without the shape changing again.
+    """
 
     at: datetime
+    scope: str = PORT
     action: str
-    name: str
-    kind: str
+    subject: str = ""
+    name: str = ""
+    kind: str = ""
     project: str | None = None
-    host: str
-    port: int
+    host: str = ""
+    port: int = 0
     pid: int | None = None
+    body: dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _named_one_way_or_the_other(self) -> Event:
+        """A port event names itself in `name`; everything else in `subject`."""
+        if not self.subject and self.name:
+            object.__setattr__(self, "subject", self.name)
+        return self
 
     @property
     def address(self) -> str:
         return f"{self.host}:{self.port}"
 
+    @property
+    def full(self) -> str:
+        """`port.registered`, `node.stale` - the name a filter can be written to."""
+        return f"{self.scope}.{self.action}"
 
 class WebhookStatus(BaseModel):
     """What became of the events this warden tried to post.

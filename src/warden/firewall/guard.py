@@ -21,6 +21,12 @@ from warden.firewall.model import Policy
 APPLYING = "applying a policy"
 ADOPTING = "adopting another firewall"
 
+# What can happen to a firewall, as far as anybody watching is concerned.
+APPLIED = "applied"
+CONFIRMED = "confirmed"
+ROLLED_BACK = "rolled_back"
+RESTORED = "restored"
+
 # How often the watchdog looks. Short enough that confirming feels immediate,
 # long enough that it costs nothing while it waits.
 BEAT = 1.0
@@ -70,6 +76,13 @@ def apply(
         # Nothing was applied, so nothing should be waiting to be undone.
         snapshots.disarm()
         raise
+    snapshots.said(
+        APPLIED,
+        backend.kind,
+        rules=len(policy.live(datetime.now(UTC))),
+        rollback=rollback,
+        reason=reason,
+    )
     return waiting
 
 
@@ -79,6 +92,7 @@ def confirm(snapshots: Snapshots) -> Armed:
     if waiting is None:
         raise FirewallError("nothing is waiting to be rolled back")
     snapshots.disarm()
+    snapshots.said(CONFIRMED, str(waiting.reason or ""), snapshot=waiting.snapshot)
     return waiting
 
 
@@ -98,7 +112,10 @@ def roll_back(backend: Backend, snapshots: Snapshots, snapshot: int | None = Non
     if body is None:
         raise FirewallError(f"no snapshot {snapshot}")
     backend.restore(body)
-    snapshots.disarm()
+    was_waiting = snapshots.disarm()
+    snapshots.said(
+        ROLLED_BACK if was_waiting else RESTORED, backend.kind, snapshot=snapshot
+    )
     return snapshot
 
 
