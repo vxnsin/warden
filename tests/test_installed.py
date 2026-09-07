@@ -1,6 +1,6 @@
 """Working out how warden got onto a machine, which says how it leaves."""
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -15,7 +15,9 @@ def test_a_uv_tool_is_upgraded_by_name():
 
 
 def test_the_windows_path_to_a_uv_tool_is_read_the_same_way():
-    found = installed._uv_tool(Path(r"C:\Users\x\AppData\Roaming\uv\tools\warden-ports"))
+    found = installed._uv_tool(
+        PureWindowsPath(r"C:\Users\x\AppData\Roaming\uv\tools\warden-ports")
+    )
     assert found is not None
     assert found.command == "uv tool upgrade warden-ports"
 
