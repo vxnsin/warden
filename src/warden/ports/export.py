@@ -7,8 +7,10 @@ are decisions this program has no business making.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
+from warden.errors import WardenError
 from warden.models import FleetRegistration, Node, Registration
 
 CADDY = "caddy"
@@ -22,17 +24,29 @@ FORMATS = (CADDY, NGINX, TRAEFIK)
 HEADER = "Written by `warden export` from the warden on {node}. Regenerate it; do not edit it."
 
 
+# A name a resolver would accept, and nothing a proxy would read as syntax.
+# `a.example.com { reverse_proxy 10.0.0.5:22 }` is one line of valid Caddy, so
+# refusing control characters is not enough here - the whole shape has to be a
+# hostname.
+HOSTNAME = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*$")
+
+
 def hostname(service: Registration, domain: str | None) -> str:
     """What the world outside should call this service.
 
     A service that carries its own `domain` in its metadata means it, whatever
-    anyone passed on the command line.
+    anyone passed on the command line - and metadata arrives over the API, so
+    it is checked here rather than trusted.
     """
     own = service.meta.get("domain")
-    if own:
-        return own
-    return f"{service.name}.{domain}" if domain else service.name
-
+    named = own or (f"{service.name}.{domain}" if domain else service.name)
+    if not HOSTNAME.match(named):
+        where = "its metadata" if own else "--domain"
+        raise WardenError(
+            f"{service.name} would be written as {named!r}, which is not a hostname - "
+            f"check {where}"
+        )
+    return named
 
 def address(service: Registration, nodes: dict[str, str]) -> str:
     """Where the proxy has to send the request.

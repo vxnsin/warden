@@ -38,12 +38,13 @@ def test_a_system_with_no_backend_says_what_it_does_know():
 
 
 def test_a_backend_asked_for_by_name_that_does_not_exist_is_refused():
-    with pytest.raises(NotPermittedError, match="no firewall backend called 'pf'"):
-        backend_for("pf")
+    with pytest.raises(NotPermittedError, match="no firewall backend called 'ipfw'"):
+        backend_for("ipfw")
 
 
 def test_a_named_backend_wins_over_the_machine():
     assert backend_for("nftables", system="Plan9").kind == "nftables"
+    assert backend_for("iptables", system="Darwin").kind == "iptables"
 
 
 def test_the_base_class_refuses_to_pretend_it_can_do_anything():

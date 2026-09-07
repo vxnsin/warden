@@ -5,6 +5,7 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -28,6 +29,29 @@ Project = Annotated[
 ]
 Port = Annotated[int, Field(ge=1, le=65535)]
 
+# Text that ends up in something which parses what it is given: a Caddyfile, an
+# nginx server block, an nftables comment, a chat message. A quote or a
+# backslash ends a quoted string somewhere, and a control character ends a
+# line - either is a way to write something the person generating it did not.
+UNQUOTABLE = '"' + chr(92)
+
+
+def plain(value: str) -> str:
+    """Text safe to write into a file that will be parsed. Raises if it is not."""
+    if not value.isprintable():
+        raise ValueError("cannot contain control characters or line breaks")
+    if any(character in UNQUOTABLE for character in value):
+        raise ValueError("cannot contain quotes or backslashes")
+    return value
+
+
+Plain = Annotated[str, AfterValidator(plain)]
+
+MetaKey = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", strip_whitespace=True)
+]
+MetaValue = Annotated[str, Field(max_length=255), AfterValidator(plain)]
+
 
 class RegistrationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -40,7 +64,7 @@ class RegistrationRequest(BaseModel):
     require_port: Port | None = None
     pid: int | None = Field(default=None, ge=1)
     ttl: int | None = Field(default=None, ge=1, le=86_400)
-    meta: dict[str, str] = Field(default_factory=dict)
+    meta: dict[MetaKey, MetaValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _one_wish_at_a_time(self) -> RegistrationRequest:

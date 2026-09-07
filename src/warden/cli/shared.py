@@ -19,6 +19,7 @@ from warden.core import store
 # Reached through this module rather than imported by name, so that a test
 # standing in for it stands in for it everywhere. The redundant alias is how
 # a re-export is spelled.
+from warden.core.events import redacted as redacted
 from warden.core.events import send_one as send_one
 from warden.errors import WardenError
 from warden.models import Registration

@@ -141,13 +141,25 @@ def from_ufw(status: str) -> Reading:
                 ports=ports,
                 source=source,
                 origin=Origin.ADOPTED,
-                comment=f"from ufw: {line}",
+                comment=_as_comment(f"from ufw: {line}"),
             )
             # ufw lists v4 and v6 separately. warden's table is `inet`, which
             # is both, so the twin is the same rule written twice.
             if not _already(reading.rules, rule):
                 reading.rules.append(rule)
     return reading
+
+def _as_comment(said: str) -> str:
+    """Another firewall's own words, made safe to write into a ruleset.
+
+    This text comes from a program's output, not from warden, so it is trimmed
+    to something that cannot end a quoted string or a line. Refusing the whole
+    adoption over a comment would be worse than tidying it.
+    """
+    tidy = " ".join(said.split())
+    for character in '"' + chr(92):
+        tidy = tidy.replace(character, "'")
+    return tidy[:160]
 
 def _already(taken: list[Rule], rule: Rule) -> bool:
     return any(
@@ -206,7 +218,7 @@ def from_firewalld(listing: str, zone_source: str = "any") -> Reading:
                 ports=set(ports),
                 source=where,
                 origin=Origin.ADOPTED,
-                comment=f"from firewalld: service {name}",
+                comment=_as_comment(f"from firewalld: service {name}"),
             )
         )
     for entry in entries["ports"]:
@@ -223,7 +235,7 @@ def from_firewalld(listing: str, zone_source: str = "any") -> Reading:
                     ports=ports,
                     source=where,
                     origin=Origin.ADOPTED,
-                    comment=f"from firewalld: port {entry}",
+                    comment=_as_comment(f"from firewalld: port {entry}"),
                 )
             )
     return reading

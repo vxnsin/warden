@@ -239,6 +239,7 @@ def test_a_ruleset_can_be_written_for_a_firewall_this_machine_does_not_have(alon
 
 
 def test_a_firewall_nobody_has_heard_of_is_refused_by_name(alone: Away):
-    result = runner_cli.invoke(app, ["firewall", "export", "--for", "iptables"])
+    result = runner_cli.invoke(app, ["firewall", "export", "--for", "ipfw"])
     assert result.exit_code == 1
-    assert "no firewall backend called 'iptables'" in result.stderr
+    assert "no firewall backend called 'ipfw'" in result.stderr
+    assert "nftables" in result.stderr  # and it says which ones there are
