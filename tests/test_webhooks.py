@@ -60,7 +60,7 @@ def test_a_different_secret_does_not_produce_the_same_signature(event: Event):
 def test_discord_gets_an_embed_a_person_can_read(event: Event):
     embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
     assert embed["title"].endswith("shop-api")
-    assert embed["description"] == "took 127.0.0.1:8080 on build-01"
+    assert embed["description"] == "took `127.0.0.1:8080` on `build-01`"
     assert embed["color"] == webhooks.LOOKS["port.registered"][0]
     assert {"name": "project", "value": "`shop`", "inline": True} in embed["fields"]
     assert embed["footer"]["text"].endswith("build-01")
@@ -259,3 +259,45 @@ def test_discord_names_the_event_once_rather_than_beside_the_subject(event: Even
     embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
     assert embed["author"]["name"] == "port.registered"
     assert "shop-api" not in embed["author"]["name"]
+
+
+def test_the_address_is_set_apart_where_the_shape_understands_code(event: Event):
+    """An address in the middle of prose is the part a reader has to hunt for."""
+    embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
+    assert embed["description"] == "took `127.0.0.1:8080` on `build-01`"
+
+    section = body_of(event, shape=webhooks.SLACK)["attachments"][0]["blocks"][0]
+    assert "`127.0.0.1:8080`" in section["text"]["text"]
+
+
+def test_a_card_gets_it_plain_because_it_has_no_code_spans(event: Event):
+    card = body_of(event, shape=webhooks.TEAMS)["attachments"][0]["content"]
+    assert card["body"][1]["text"] == "took 127.0.0.1:8080 on build-01"
+
+
+def test_what_the_sentence_already_said_is_not_a_field_as_well(event: Event):
+    for shape, fields in (
+        (webhooks.DISCORD, lambda body: [f["name"] for f in body["embeds"][0]["fields"]]),
+        (
+            webhooks.SLACK,
+            lambda body: [
+                f["text"] for f in body["attachments"][0]["blocks"][1]["fields"]
+            ],
+        ),
+    ):
+        said = fields(body_of(event, shape=shape))
+        assert not any("address" in one for one in said), shape
+        assert any("kind" in one for one in said), shape
+
+
+def test_the_mascot_rides_along_where_a_shape_will_draw_one(event: Event):
+    embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
+    assert embed["author"]["icon_url"] == webhooks.ICON
+
+    section = body_of(event, shape=webhooks.SLACK)["attachments"][0]["blocks"][0]
+    assert section["accessory"]["image_url"] == webhooks.ICON
+
+
+def test_the_plain_shape_carries_no_picture_either(event: Event):
+    body, _ = webhooks.render(event, node="build-01", shape=webhooks.JSON)
+    assert b"icon.png" not in body
