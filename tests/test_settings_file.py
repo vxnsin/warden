@@ -164,3 +164,36 @@ def test_setup_keeps_what_it_was_not_asked_about():
     config.write({"update_command": "/usr/local/bin/update-warden.sh"})
     runner.invoke(app, ["setup"], input="\n\n\n\n\n\n\n\n\n")
     assert config.stored()["update_command"] == "/usr/local/bin/update-warden.sh"
+
+
+def test_a_mapping_survives_being_written_and_read_back():
+    config.write({"webhook_colours": {"node.stale": "#e5544b"}})
+    assert Settings().webhook_colours == {"node.stale": "#e5544b"}
+
+
+def test_an_empty_mapping_is_left_out_of_the_file(tmp_path):
+    config.write({"webhook_colours": {}, "pool_start": 4000})
+    assert "webhook_colours" not in config.config_file().read_text()
+
+
+def test_a_mapping_is_shown_readably_rather_than_as_python():
+    config.write({"webhook_titles": {"node.stale": "went quiet"}})
+    output = runner.invoke(app, ["settings"]).output
+    assert "node.stale=went quiet" in output
+
+
+def test_settings_prints_the_table_when_there_is_no_screen_to_draw_on():
+    # Which is what the runner is: no terminal, so no screen to open.
+    assert "pool_start" in runner.invoke(app, ["settings"]).output
+    assert "pool_start" in runner.invoke(app, ["settings", "list"]).output
+
+
+def test_naming_a_part_without_a_screen_says_so_rather_than_hanging():
+    result = runner.invoke(app, ["settings", "embed"])
+    assert result.exit_code != 0
+    assert "no terminal" in result.output
+
+
+def test_every_part_of_the_screen_can_be_opened_by_name():
+    for part in config.PARTS:
+        assert runner.invoke(app, ["settings", part, "--help"]).exit_code == 0

@@ -66,6 +66,19 @@ WORDMARK = (
 
 TAGLINE = "nothing binds a port without asking"
 
+AUTHOR = "vxnsin"
+REPO = "https://github.com/vxnsin/warden"
+
+
+def byline() -> Text:
+    """Who wrote it, and where it lives.
+
+    The name is a link, which a terminal that knows OSC 8 makes clickable and
+    every other one prints as the plain word it already was."""
+    said = Text("by ", style=BONE_DIM)
+    said.append(AUTHOR, style=f"{BONE_DIM} link {REPO}")
+    return said
+
 
 def kind_colour(kind: str) -> str:
     return KIND_COLOURS.get(kind, BONE_DIM)

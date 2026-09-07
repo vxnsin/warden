@@ -130,8 +130,21 @@ Nothing ever waits on a webhook: delivery happens after the change is
 committed, off the request path, and `warden doctor` says when the last one did
 not arrive — because from the inside, a webhook failing all day looks exactly
 like a quiet day.
+
+Each of the thirteen carries a colour and a line of words, and `warden settings
+embed` changes them one event at a time against a preview of the message it
+would send — the rest keep the ones they came with. It is the same two settings
+either way:
+
+```toml
+webhook_colours = { "node.stale" = "#e5544b" }
+webhook_titles = { "node.stale" = "has stopped answering" }
+```
+
+`json` carries neither, because whatever reads it decides how that looks.
 [Events and webhooks](https://github.com/vxnsin/warden/wiki/Events-and-webhooks)
-has where to get an address, and how to check the signature.
+has where to get an address, the shape of every event, and how to check the
+signature.
 
 ### Write the proxy config nobody wants to write by hand
 
@@ -210,14 +223,16 @@ warden setup
 
 <img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/setup.svg" alt="warden setup" width="900">
 
-One screen: which ports to hand out, whether other machines may reach it, which
-hub it reports to, where events go, and `ctrl+t` to post a test event before
-anything is saved. Questions that nothing has earned stay hidden — no token
-field until it listens beyond loopback, no webhook shape until events go
-anywhere at all.
+One screen in seven tabs: which ports to hand out, whether other machines may
+reach it, which hub it reports to, where events go, what those events look like
+in chat, whether it holds the firewall, and what it may do to a process.
+`ctrl+t` posts a test event before anything is saved. Questions that nothing has
+earned stay hidden — no token field until it listens beyond loopback, no webhook
+shape until events go anywhere at all.
 
 | Key | Action |
 | --- | --- |
+| `ctrl+left` `ctrl+right` | Move between tabs |
 | `tab` `shift+tab` | Move between fields |
 | `space` | Toggle a switch or a tick box |
 | `enter` | Open a menu, or pick from it |
@@ -228,7 +243,22 @@ anywhere at all.
 It fits an 80 by 24 terminal, which is the size an ssh session usually opens at.
 Without a terminal — a script piping answers in, a job on a build machine — the
 same questions come one at a time, and `warden setup --plain` asks for that on
-purpose. [Configuration](https://github.com/vxnsin/warden/wiki/Configuration)
+purpose.
+
+`warden settings` opens the same screen afterwards, over what is already
+written down, and naming a part goes straight there:
+
+```sh
+warden settings embed       # what each event looks like in chat
+warden settings firewall    # which backend, and how long before it rolls back
+warden settings --plain     # the table instead, with where each value came from
+warden settings set port 7011
+```
+
+The difference from `setup` is what happens on the way out: setup writes
+everything it asked about, and `warden settings` writes it over the file, so a
+setting it never asks about survives.
+[Configuration](https://github.com/vxnsin/warden/wiki/Configuration)
 has every setting there is.
 
 ## More than one machine

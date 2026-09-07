@@ -240,7 +240,9 @@ class WardenApp(App[None]):
     def _label(self) -> None:
         """The heading, whose machine this is, and the key hints."""
         source = "this machine, no warden running" if self.standalone else self.client.url
-        self.query_one("#tagline", Static).update(f"{theme.TAGLINE}{SEP}{source}")
+        said = Text(f"{theme.TAGLINE}{SEP}{source}{SEP}", style=theme.BONE_DIM)
+        said.append_text(theme.byline())
+        self.query_one("#tagline", Static).update(said)
         self.query_one("#section", Static).update(self._heading())
         hints = [
             ("up/down/j/k", "move"),
