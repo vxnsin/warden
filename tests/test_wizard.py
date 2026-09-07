@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from textual.widgets import Input, Select, SelectionList, Static, Switch
+from textual.widgets import Input, Select, SelectionList, Static, Switch, TabbedContent
 
 from warden import wizard
 from warden.core.config import Settings
@@ -23,6 +23,16 @@ def asking(scenario, current: Settings | None = None, size=(108, 46)):
         return app.return_value
 
     return asyncio.run(main())
+
+
+async def settled(pilot) -> None:
+    """Let every message posted so far be delivered before looking.
+
+    A menu announcing a new value sets two fields, and those set two more; one
+    pause only drains the first of them.
+    """
+    for _ in range(4):
+        await pilot.pause()
 
 
 def text_of(app: Setup, selector: str) -> str:
@@ -360,7 +370,7 @@ def test_it_stays_in_one_piece_on_a_very_small_terminal():
 
 def test_the_form_scrolls_without_leaving_the_field_you_are_in():
     async def scenario(app: Setup, pilot) -> None:
-        form = app.query_one("#form")
+        form = app.query_one("#tab-ports")
         assert form.scroll_offset.y == 0
         focused = app.focused
         await pilot.press("pagedown")
@@ -454,3 +464,113 @@ def test_a_confirmation_window_that_is_not_a_number_is_refused():
         await pilot.press("ctrl+q")
 
     assert asking(scenario) is None
+
+
+def on_the_embed_tab(scenario, current: Settings | None = None, size=(108, 46)):
+    """The same, with the embed tab already in front."""
+
+    async def opened(app: Setup, pilot) -> None:
+        app.query_one("#form", TabbedContent).active = "tab-embed"
+        await settled(pilot)
+        await scenario(app, pilot)
+
+    return asking(opened, current, size)
+
+
+def test_the_embed_tab_shows_what_the_first_event_would_look_like():
+    async def scenario(app: Setup, pilot) -> None:
+        assert app.query_one("#embed-which", Select).value == "port.registered"
+        assert "took" in text_of(app, "#embed-preview")
+
+    on_the_embed_tab(scenario)
+
+
+def test_choosing_an_event_loads_the_words_it_already_has():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#embed-which", Select).value = "node.stale"
+        await settled(pilot)
+        assert app.query_one("#embed-words", Input).value == "has stopped answering"
+        assert app.query_one("#embed-colour", Input).value == "#e5544b"
+        assert "has stopped answering" in text_of(app, "#embed-preview")
+
+    on_the_embed_tab(
+        scenario,
+        settings(
+            webhook_colours="node.stale=#e5544b",
+            webhook_titles="node.stale=has stopped answering",
+        ),
+    )
+
+
+def test_the_preview_follows_what_is_being_typed():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#embed-which", Select).value = "firewall.applied"
+        await settled(pilot)
+        app.query_one("#embed-words", Input).value = "changed the locks"
+        await settled(pilot)
+        assert "changed the locks" in text_of(app, "#embed-preview")
+
+    on_the_embed_tab(scenario)
+
+
+def test_what_was_typed_for_one_event_survives_looking_at_another():
+    async def scenario(app: Setup, pilot) -> None:
+        which = app.query_one("#embed-which", Select)
+        which.value = "node.stale"
+        await settled(pilot)
+        app.query_one("#embed-words", Input).value = "went quiet"
+        await settled(pilot)
+        which.value = "port.moved"
+        await settled(pilot)
+        assert app.query_one("#embed-words", Input).value == ""
+        which.value = "node.stale"
+        await settled(pilot)
+        assert app.query_one("#embed-words", Input).value == "went quiet"
+        await pilot.press("ctrl+s")
+
+    answers = on_the_embed_tab(scenario)
+    assert answers["webhook_titles"] == {"node.stale": "went quiet"}
+
+
+def test_clearing_a_colour_gives_the_event_back_the_one_it_came_with():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#embed-which", Select).value = "node.stale"
+        await settled(pilot)
+        app.query_one("#embed-colour", Input).value = ""
+        await settled(pilot)
+        await pilot.press("ctrl+s")
+
+    answers = on_the_embed_tab(scenario, settings(webhook_colours="node.stale=#e5544b"))
+    assert answers["webhook_colours"] == {}
+
+
+def test_a_colour_nobody_typed_is_not_written_down():
+    async def scenario(app: Setup, pilot) -> None:
+        await pilot.press("ctrl+s")
+
+    answers = on_the_embed_tab(scenario)
+    assert answers["webhook_colours"] == {}
+    assert answers["webhook_titles"] == {}
+
+
+def test_the_screen_can_open_on_the_part_somebody_asked_for():
+    async def main():
+        app = Setup(settings(), start="firewall")
+        async with app.run_test(size=(108, 46)) as pilot:
+            await settled(pilot)
+            assert app.query_one("#form", TabbedContent).active == "tab-firewall"
+
+    asyncio.run(main())
+
+
+def test_a_part_nobody_has_falls_back_to_the_first_one():
+    assert Setup(settings(), start="nonsense").start == "ports"
+
+
+def test_the_banner_says_who_wrote_it_and_links_to_where_it_lives():
+    async def scenario(app: Setup, pilot) -> None:
+        tagline = app.query_one("#tagline", Static)
+        assert "by vxnsin" in str(tagline.content)
+        assert any("github.com/vxnsin/warden" in str(span.style) for span in tagline.content.spans)
+
+    asking(scenario)

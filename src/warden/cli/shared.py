@@ -73,7 +73,10 @@ def _dump(payload: object) -> None:
 
 def _greet() -> None:
     console.print(theme.banner_text(getattr(console.file, "encoding", None)))
-    console.print(theme.TAGLINE, style=theme.BONE_DIM)
+    said = Text(theme.TAGLINE, style=theme.BONE_DIM)
+    said.append("  ~  ")
+    said.append_text(theme.byline())
+    console.print(said)
     console.print()
 
 

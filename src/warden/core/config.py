@@ -26,6 +26,11 @@ from warden.core.happenings import NAMES, NOTABLE, known
 
 DEFAULT_URL = "http://127.0.0.1:7010"
 
+# The parts the settings screen is divided into, in the order they appear.
+# Here rather than in the screen itself so `warden settings edit` can name them
+# without importing a terminal library it may never use.
+PARTS = ("ports", "reach", "fleet", "events", "embed", "firewall", "risk")
+
 
 def parse_ports(value: object) -> object:
     """Accept ``8080``, ``"8080,9000"`` and ``"8080, 9000-9010"`` for port sets."""
@@ -110,7 +115,11 @@ def write(values: Mapping[str, object]) -> Path:
     """Replace the config file with these settings, dropping the empty ones."""
     path = config_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    kept = {key: value for key, value in sorted(values.items()) if value not in (None, "")}
+    kept = {
+        key: value
+        for key, value in sorted(values.items())
+        if value not in (None, "") and value != {}
+    }
     lines = ["# Written by `warden setup`. `warden settings` edits it.", ""]
     lines += [f"{key} = {_toml(value)}" for key, value in kept.items()]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -128,7 +137,13 @@ def _only_ours(path: Path) -> None:
     with suppress(OSError):
         path.chmod(0o600)
 
+
 def _toml(value: object) -> str:
+    if isinstance(value, Mapping):
+        inside = ", ".join(
+            f"{_toml(str(key))} = {_toml(said)}" for key, said in sorted(value.items())
+        )
+        return "{ " + inside + " }"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):

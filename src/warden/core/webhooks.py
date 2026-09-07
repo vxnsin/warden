@@ -79,15 +79,16 @@ def _colour(said: str, fallback: int) -> int:
     except ValueError:
         return fallback
 
-def sentence(
-    event: Event, node: str, titles: Mapping[str, str] | None = None
-) -> str:
+
+def sentence(event: Event, node: str, titles: Mapping[str, str] | None = None) -> str:
     """One line, readable by someone who has never heard of warden."""
-    _, title = looks(event, None, titles)
-    if event.scope == PORT:
+    said = (titles or {}).get(event.full)
+    if event.scope == PORT and not said:
         return f"{event.name} {VERBS.get(event.action, event.action)} {event.address} on {node}"
-    where = f" on {node}" if event.scope != NODE else ""
-    return f"{event.subject or event.scope} {title}{where}"
+    _, title = looks(event, None, titles)
+    who = event.subject or event.name or event.scope
+    where = "" if event.scope == NODE else f" on {node}"
+    return f"{who} {title}{where}"
 
 
 def _title(event: Event) -> str:

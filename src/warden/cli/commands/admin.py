@@ -26,7 +26,7 @@ from warden.cli.shared import (
     redacted,
 )
 from warden.core import autostart, config, happenings, health, webhooks
-from warden.core.config import Settings
+from warden.core.config import PARTS, Settings
 from warden.errors import WardenError
 
 ORDER = 10
@@ -55,8 +55,10 @@ def _shown(field: str, value: object) -> Text:
         return Text("set", style=theme.MOSS)
     if field in ADDRESSES and value:
         return Text(redacted(str(value)) or "set", style=theme.BONE)
-    if value is None or value == "" or value == set():
+    if value is None or value == "" or value == set() or value == {}:
         return Text("-", style=theme.BONE_DIM)
+    if isinstance(value, dict):
+        return Text(", ".join(f"{key}={said}" for key, said in sorted(value.items())))
     if isinstance(value, set):
         value = ",".join(str(item) for item in sorted(value))
     return Text(str(value))
@@ -101,6 +103,7 @@ def _ask_some_of(question: str, default: list[str]) -> list[str]:
             console.print("  Name at least one, or answer no above.", style=theme.SHRIEKER)
         else:
             return chosen
+
 
 def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
     """Where events go, and whether that address actually answers."""
@@ -269,10 +272,30 @@ app.add_typer(settings_app, name="settings", invoke_without_command=True)
 
 
 @settings_app.callback(invoke_without_command=True)
-def settings_list(ctx: typer.Context, as_json: JsonOption = False) -> None:
-    """Show every setting, its value, and where that value came from."""
+def settings_main(
+    ctx: typer.Context,
+    plain: Annotated[
+        bool, typer.Option("--plain", help="Print the table instead of opening a screen.")
+    ] = False,
+    as_json: JsonOption = False,
+) -> None:
+    """Open the settings screen, or print what is in effect.
+
+    A terminal gets the same screen `warden setup` uses, and naming a part -
+    `warden settings embed` - opens it there. Anything without a terminal - a
+    script, a build machine, `--plain`, `--json` - gets the table instead, and
+    `warden settings set` writes one at a time.
+    """
     if ctx.invoked_subcommand is not None:
         return
+    if plain or as_json or not shared._has_a_screen():
+        _print_settings(as_json)
+        return
+    _edit_settings(PARTS[0])
+
+
+def _print_settings(as_json: bool) -> None:
+    """Every setting, its value, and where that value came from."""
     current = Settings()
     if as_json:
         _dump(
@@ -292,6 +315,51 @@ def settings_list(ctx: typer.Context, as_json: JsonOption = False) -> None:
         source = config.origin(field)
         table.add_row(field, _shown(field, value), Text(source, style=ORIGIN_COLOURS[source]))
     console.print(table)
+
+
+def _edit_settings(part: str) -> None:
+    """The same screen `warden setup` uses, over what is already written down.
+
+    Setup writes everything it asked about; this writes it over the file, so a
+    setting it never asks about - one put there by hand - survives.
+    """
+    if not shared._has_a_screen():
+        raise _fail(
+            WardenError("no terminal to draw on; `warden settings set` writes one at a time")
+        )
+    # Imported here so the command line stays quick for everything that never
+    # opens a screen.
+    from warden.wizard import run
+
+    chosen = run(start=part)
+    if chosen is None:
+        console.print("Nothing written.", style=theme.BONE_DIM)
+        return
+    written = config.write({**config.stored(), **chosen})
+    console.print(f"Written to {written}", style=theme.MOSS)
+    console.print(
+        "A warden that is already running keeps the settings it started with.",
+        style=theme.BONE_DIM,
+    )
+
+
+def _opens(part: str):
+    def open_this_part() -> None:
+        _edit_settings(part)
+
+    return open_this_part
+
+
+# One per part, so `warden settings embed` lands where somebody meant, and the
+# parts are listed by `--help` rather than being something to know about.
+for _part in PARTS:
+    settings_app.command(_part, help=f"Open the settings screen on {_part}.")(_opens(_part))
+
+
+@settings_app.command("list")
+def settings_list(as_json: JsonOption = False) -> None:
+    """Show every setting, its value, and where that value came from."""
+    _print_settings(as_json)
 
 
 @settings_app.command("set")

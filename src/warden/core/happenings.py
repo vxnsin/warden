@@ -7,8 +7,9 @@ about what exists. A name here is what somebody writes in `webhook_events`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from warden.models import FIREWALL, NODE, PORT
+from warden.models import FIREWALL, NODE, PORT, Event
 
 
 @dataclass(frozen=True)
@@ -60,3 +61,29 @@ def wanted(chosen: set[str], event_scope: str, event_action: str) -> bool:
     """Whether this one was asked for, by full name, bare name, or whole scope."""
     full = f"{event_scope}.{event_action}"
     return full in chosen or event_action in chosen or f"{event_scope}.*" in chosen
+
+
+def like(name: str) -> Event:
+    """One of each, made up, for showing somebody what a message will look like."""
+    scope, _, action = name.partition(".")
+    now = datetime.now(UTC)
+    if scope == PORT:
+        return Event(
+            at=now,
+            action=action,
+            name="shop-api",
+            kind="backend",
+            project="shop",
+            host="10.4.0.7",
+            port=8000,
+            pid=4242,
+        )
+    if scope == NODE:
+        return Event(
+            at=now,
+            scope=scope,
+            action=action,
+            subject="build-01",
+            body={"url": "http://build-01:7010"},
+        )
+    return Event(at=now, scope=scope, action=action, subject="nftables", body={"rules": 12})
