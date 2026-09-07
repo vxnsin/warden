@@ -21,6 +21,7 @@ from warden.cli.shared import (
     app,
     console,
 )
+from warden.core import happenings
 from warden.core.config import Settings
 from warden.core.events import redacted
 from warden.errors import WardenError
@@ -28,8 +29,11 @@ from warden.errors import WardenError
 ORDER = 40
 
 
-@app.command()
-def events(
+@app.command("events")
+def follow_events(
+    known: Annotated[
+        bool, typer.Option("--known", help="List everything warden can tell you about.")
+    ] = False,
     url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
@@ -39,6 +43,9 @@ def events(
     Runs until it is stopped, which is what makes it worth piping somewhere.
     With `--json` that is one event per line, flushed as it arrives.
     """
+    if known:
+        _say_what_can_happen(as_json)
+        return
     with shared._client(url, token) as client:
         try:
             for event in client.events():
@@ -47,11 +54,14 @@ def events(
                     continue
                 line = Text(f"{event.at.astimezone():%H:%M:%S}  ", style=theme.BONE_DIM)
                 line.append(
-                    f"{event.action:<11}",
+                    f"{event.full:<20}",
                     style=ACTION_COLOURS.get(event.action, theme.BONE),
                 )
-                line.append(f"{event.name}  ")
-                line.append(event.address, style=theme.BONE_DIM)
+                line.append(f"{event.subject}  ")
+                line.append(
+                    event.address if event.scope == "port" else _shortly(event.body),
+                    style=theme.BONE_DIM,
+                )
                 console.print(line)
         except WardenError as exc:
             raise _fail(exc) from exc
@@ -59,6 +69,35 @@ def events(
             # Stopping a stream on purpose is not an error worth a traceback.
             pass
 
+
+def _shortly(body: dict[str, object]) -> str:
+    return "  ".join(f"{key}={value}" for key, value in body.items())
+
+
+def _say_what_can_happen(as_json: bool) -> None:
+    """The whole list, so nobody has to guess what to put in webhook_events."""
+    if as_json:
+        _dump(
+            [
+                {"name": one.full, "means": one.means, "by_default": one.notable}
+                for one in happenings.EVERY
+            ]
+        )
+        return
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("EVENT", "MEANS", "POSTED"):
+        table.add_column(column)
+    for one in happenings.EVERY:
+        table.add_row(
+            Text(one.full, style=theme.GLOW),
+            one.means,
+            Text("yes", style=theme.MOSS) if one.notable else Text("ask", style=theme.BONE_DIM),
+        )
+    console.print(table)
+    console.print(
+        "A whole scope works too: firewall.* - and the old bare names still do.",
+        style=theme.BONE_DIM,
+    )
 
 @app.command()
 def webhook(

@@ -119,8 +119,10 @@ $ warden events
 09:41:44  released     shop-api  127.0.0.1:8600
 ```
 
-`GET /v1/events` is the same stream as server-sent events. A webhook sends them
-somewhere else — `discord`, `slack` and `teams` post something the chat window
+`warden events --known` lists everything it can tell you about: thirteen things
+in three scopes, from a port changing hands to a node going quiet to a firewall
+rolling itself back. `GET /v1/events` is the same stream as server-sent events.
+A webhook sends them somewhere else — `discord`, `slack` and `teams` post something the chat window
 renders, and `json` posts the event as it is, signed with an HMAC over exactly
 the bytes sent so the far end can tell it really came from you.
 

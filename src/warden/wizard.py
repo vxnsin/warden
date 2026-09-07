@@ -23,7 +23,7 @@ from warden import theme
 from warden.core import config, webhooks
 from warden.core.config import Settings
 from warden.core.events import post_once
-from warden.core.store import ACTIONS
+from warden.core.happenings import EVERY, wanted
 from warden.tui import BANNER_MIN_HEIGHT, PALETTE
 
 WEBHOOK_KEYS = ("webhook", "webhook_format", "webhook_events", "webhook_secret")
@@ -125,7 +125,7 @@ Select:focus > SelectCurrent { border: tall $glow_dim; }
 
 SelectionList {
     width: 1fr;
-    max-width: 44;
+    max-width: 64;
     height: auto;
     background: $sculk;
     border: tall $vein;
@@ -295,8 +295,16 @@ class Setup(App[dict[str, object] | None]):
                         "Events worth posting",
                         SelectionList[str](
                             *(
-                                Selection(name, name, name in current.webhook_events)
-                                for name in ACTIONS
+                                Selection(
+                                    f"{happening.full:<22}{happening.means}",
+                                    happening.full,
+                                    wanted(
+                                        current.webhook_events,
+                                        happening.scope,
+                                        happening.action,
+                                    ),
+                                )
+                                for happening in EVERY
                             ),
                             id="webhook-events",
                         ),

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from warden.firewall.model import Rule
-from warden.models import Event, Node, Registration
+from warden.models import FIREWALL, PORT, Event, Node, Registration
 
 logger = logging.getLogger("warden.store")
 
@@ -35,6 +35,9 @@ CREATE INDEX IF NOT EXISTS registrations_project
 CREATE TABLE IF NOT EXISTS events (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     at      TEXT NOT NULL,
+    scope   TEXT NOT NULL DEFAULT 'port',
+    subject TEXT NOT NULL DEFAULT '',
+    body    TEXT NOT NULL DEFAULT '{}',
     action  TEXT NOT NULL,
     name    TEXT NOT NULL,
     kind    TEXT NOT NULL,
@@ -96,6 +99,14 @@ CREATE TABLE IF NOT EXISTS nodes (
 # Columns added after the first release, applied to databases that predate them.
 ADDED_COLUMNS = {"ttl": "INTEGER"}
 
+# The same, for the events table: a database written before events were about
+# more than ports has none of these.
+ADDED_EVENT_COLUMNS = {
+    "scope": "TEXT NOT NULL DEFAULT 'port'",
+    "subject": "TEXT NOT NULL DEFAULT ''",
+    "body": "TEXT NOT NULL DEFAULT '{}'",
+}
+
 REGISTERED = "registered"
 RENEWED = "renewed"
 MOVED = "moved"
@@ -137,6 +148,9 @@ def _row_to_registration(row: sqlite3.Row) -> Registration:
 def _row_to_event(row: sqlite3.Row) -> Event:
     return Event(
         at=datetime.fromisoformat(row["at"]),
+        scope=_column(row, "scope", "port"),
+        subject=_column(row, "subject", ""),
+        body=json.loads(_column(row, "body", "{}")),
         action=row["action"],
         name=row["name"],
         kind=row["kind"],
@@ -145,6 +159,15 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         port=row["port"],
         pid=row["pid"],
     )
+
+
+def _column(row: sqlite3.Row, name: str, fallback: object) -> object:
+    """A column an older database may not have yet."""
+    try:
+        said = row[name]
+    except IndexError:
+        return fallback
+    return fallback if said is None else said
 
 
 def _row_to_node(row: sqlite3.Row) -> Node:
@@ -182,10 +205,11 @@ class Store:
 
     def _add_missing_columns(self) -> None:
         """Bring a database written by an older version up to the current schema."""
-        present = {row["name"] for row in self._db.execute("PRAGMA table_info(registrations)")}
-        for column, definition in ADDED_COLUMNS.items():
-            if column not in present:
-                self._db.execute(f"ALTER TABLE registrations ADD COLUMN {column} {definition}")
+        for table, columns in (("registrations", ADDED_COLUMNS), ("events", ADDED_EVENT_COLUMNS)):
+            present = {row["name"] for row in self._db.execute(f"PRAGMA table_info({table})")}
+            for column, definition in columns.items():
+                if column not in present:
+                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def close(self) -> None:
         with self._lock:
@@ -248,11 +272,15 @@ class Store:
         held = row if isinstance(row, sqlite3.Row) else row.model_dump()
         self._db.execute(
             """
-            INSERT INTO events (at, action, name, kind, project, host, port, pid)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events
+                (at, scope, subject, body, action, name, kind, project, host, port, pid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _isoformat(at),
+                PORT,
+                held["name"],
+                "{}",
                 action,
                 held["name"],
                 held["kind"],
@@ -278,6 +306,39 @@ class Store:
                 pid=held["pid"],
             )
         )
+
+    def announce(self, scope: str, action: str, subject: str, **body: object) -> None:
+        """Write down something that happened to a thing that is not a port.
+
+        The same book, the same listeners, the same webhook. A node joining and
+        a ruleset being applied are as much part of what happened here as a
+        port changing hands, and nobody should have to look in two places.
+        """
+        event = Event(
+            at=datetime.now(UTC), scope=scope, action=action, subject=subject, body=body
+        )
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO events
+                    (at, scope, subject, body, action, name, kind, project, host, port, pid)
+                VALUES (?, ?, ?, ?, ?, '', '', NULL, '', 0, NULL)
+                """,
+                (
+                    _isoformat(event.at),
+                    scope,
+                    subject,
+                    json.dumps(body, default=str, separators=(",", ":")),
+                    action,
+                ),
+            )
+            self._db.execute(
+                "DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?",
+                (self.event_cap,),
+            )
+            self._db.commit()
+            self._pending.append(event)
+        self._announce()
 
     def subscribe(self, listener: Callable[[Event], None]) -> None:
         """Hear about every change, once it is committed and not before."""
@@ -592,6 +653,11 @@ class Snapshots:
 
     def __init__(self, store: Store) -> None:
         self._store = store
+
+
+    def said(self, action: str, subject: str, **body: object) -> None:
+        """Tell whoever is watching what just happened to the firewall."""
+        self._store.announce(FIREWALL, action, subject, **body)
 
     def take(self, backend: str, body: str, reason: str | None = None) -> int:
         with self._store._lock:

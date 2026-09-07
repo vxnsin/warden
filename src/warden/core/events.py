@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from warden.core import webhooks
+from warden.core import happenings, webhooks
 from warden.core.config import Settings
 from warden.models import Event, WebhookStatus
 
@@ -111,7 +111,9 @@ class EventBus:
     def _fan_out(self, event: Event) -> None:
         for queue in self._watching:
             self._offer(queue, event)
-        if self._outbox is not None and event.action in self.settings.webhook_events:
+        if self._outbox is not None and happenings.wanted(
+            self.settings.webhook_events, event.scope, event.action
+        ):
             self._offer(self._outbox, event)
 
     def _offer(self, queue: asyncio.Queue[Event], event: Event) -> None:

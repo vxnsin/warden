@@ -22,7 +22,7 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
-from warden.core.store import ACTIONS, NOTABLE
+from warden.core.happenings import NAMES, NOTABLE, known
 
 DEFAULT_URL = "http://127.0.0.1:7010"
 
@@ -68,6 +68,21 @@ def parse_networks(value: object) -> object:
 
 
 NetworkSet = Annotated[set[str], NoDecode, BeforeValidator(parse_networks)]
+
+
+def parse_pairs(value: object) -> object:
+    """Accept ``"node.stale=#e5544b, port.moved=#c8892a"`` for a small mapping."""
+    if not isinstance(value, str):
+        return value
+    said = {}
+    for chunk in value.replace(";", ",").split(","):
+        key, _, entry = chunk.partition("=")
+        if key.strip() and entry.strip():
+            said[key.strip()] = entry.strip()
+    return said
+
+
+PairSet = Annotated[dict[str, str], NoDecode, BeforeValidator(parse_pairs)]
 
 
 def default_database() -> Path:
@@ -197,6 +212,9 @@ class Settings(BaseSettings):
     webhook_format: Literal["json", "discord", "slack", "teams"] = "json"
     webhook_events: WordSet = Field(default_factory=lambda: set(NOTABLE))
     webhook_secret: str | None = None
+    # `node.stale=#e5544b, port.moved=#c8892a` - one at a time, the rest keep
+    # the colours they came with.
+    webhook_colours: PairSet = Field(default_factory=dict)
 
     firewall_backend: str | None = None
     firewall_rollback: int = Field(default=60, ge=0, le=3600)
@@ -258,10 +276,16 @@ class Settings(BaseSettings):
     @field_validator("webhook_events")
     @classmethod
     def _known_events(cls, value: set[str]) -> set[str]:
-        unknown = sorted(value - set(ACTIONS))
+        # A whole scope, a full name, or the bare name it had when everything
+        # here was about ports.
+        unknown = sorted(
+            name
+            for name in value
+            if not name.endswith(".*") and known(name) is None
+        )
         if unknown:
             raise ValueError(
-                f"no such event: {', '.join(unknown)}; there is only {', '.join(ACTIONS)}"
+                f"no such event: {', '.join(unknown)}; there is {', '.join(NAMES)}"
             )
         return value
 

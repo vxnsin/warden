@@ -25,7 +25,7 @@ from warden.cli.shared import (
     errors,
     redacted,
 )
-from warden.core import autostart, config, health, store, webhooks
+from warden.core import autostart, config, happenings, health, webhooks
 from warden.core.config import Settings
 from warden.errors import WardenError
 
@@ -80,20 +80,27 @@ def _ask_one_of(question: str, options: tuple[str, ...], default: str) -> str:
         console.print(f"  There is no {answer!r}.", style=theme.SHRIEKER)
 
 
-def _ask_some_of(question: str, options: tuple[str, ...], default: list[str]) -> list[str]:
+def _ask_some_of(question: str, default: list[str]) -> list[str]:
+    """Which events to post. A whole scope, a full name, or an old bare one.
+
+    Thirteen names do not fit on a prompt line, so it offers the scopes and
+    lets `warden events` be the place you go to read the rest.
+    """
+    scopes = sorted({happening.scope + ".*" for happening in happenings.EVERY})
     while True:
         given = typer.prompt(
-            f"{question} ({', '.join(options)})", default=",".join(default)
+            f"{question} ({', '.join(scopes)}, or names)", default=",".join(default)
         )
         chosen = sorted({word.strip().lower() for word in given.split(",") if word.strip()})
-        unknown = [word for word in chosen if word not in options]
+        unknown = [
+            word for word in chosen if not word.endswith(".*") and happenings.known(word) is None
+        ]
         if unknown:
             console.print(f"  There is no {theme.listed(unknown)}.", style=theme.SHRIEKER)
         elif not chosen:
             console.print("  Name at least one, or answer no above.", style=theme.SHRIEKER)
         else:
             return chosen
-
 
 def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
     """Where events go, and whether that address actually answers."""
@@ -108,7 +115,7 @@ def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
     shape = _ask_one_of("  Shape it should take", webhooks.FORMATS, current.webhook_format)
     answers["webhook_format"] = shape
     answers["webhook_events"] = _ask_some_of(
-        "  Events worth posting", store.ACTIONS, sorted(current.webhook_events)
+        "  Events worth posting", sorted(current.webhook_events)
     )
     if shape == webhooks.JSON:
         console.print(
