@@ -103,6 +103,15 @@ def _tidy(url: str | None = None, token: str | None = None) -> list[str]:
     return stale
 
 
+def _asking(url: str, token: str | None, ask):
+    """Put a question to another warden, and fail the way every command does."""
+    try:
+        with shared._client(url, token) as client:
+            return ask(client)
+    except WardenError as exc:
+        raise _fail(exc) from exc
+
+
 def _said_closed(closed: list[str]) -> None:
     for name in closed:
         errors.print(f"closed {name} - its service is gone", style=theme.BONE_DIM)
@@ -113,11 +122,22 @@ def firewall_list(
     origin: Annotated[
         str | None, typer.Option(help="Only rules that came from here.")
     ] = None,
+    on: Annotated[
+        str | None, typer.Option("--on", help="Ask the warden at this address instead.")
+    ] = None,
+    token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Every rule this machine holds, and where each one came from."""
-    _said_closed(_tidy())
-    rules = _rules().list(origin=origin)
+    """Every rule this machine holds, and where each one came from.
+
+    `--on http://host:7010` asks that warden about its own rules, which needs
+    nothing switched on there - reading is what a token already allows.
+    """
+    if on:
+        rules = _asking(on, token, lambda client: client.firewall_rules(origin=origin))
+    else:
+        _said_closed(_tidy())
+        rules = _rules().list(origin=origin)
     if as_json:
         _dump([rule.model_dump(mode="json") for rule in rules])
         return
@@ -233,6 +253,10 @@ def firewall_open(
     source: Annotated[
         str, typer.Option("--from", help="Which network may reach it.")
     ] = "",
+    on: Annotated[
+        str | None,
+        typer.Option("--on", help="Ask the warden at this address to open it there."),
+    ] = None,
     url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
@@ -242,7 +266,18 @@ def firewall_open(
     The registry knows which port that is and how long the service has it for,
     so the rule inherits both. Nothing is opened by registering: this is a
     person asking, and it is bounded by what the registry may ever open.
+
+    `--on http://host:7010` asks that warden to open it on its own machine,
+    which it will only do if allow_remote_firewall is set there.
     """
+    if on:
+        rule = _asking(on, token, lambda client: client.firewall_open(service, source=source))
+        if as_json:
+            _dump(rule.model_dump(mode="json"))
+        else:
+            console.print(_rules_table([rule]))
+        return
+
     settings = Settings()
     try:
         with shared._client(url, token) as client:
@@ -512,8 +547,36 @@ def firewall_restore(
 
 
 @firewall_app.command("status")
-def firewall_status(as_json: JsonOption = False) -> None:
+def firewall_status(
+    on: Annotated[
+        str | None, typer.Option("--on", help="Ask the warden at this address instead.")
+    ] = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
     """Whether a rollback is waiting, and what this machine can do."""
+    if on:
+        said = _asking(on, token, lambda client: client.firewall())
+        if as_json:
+            _dump(said.model_dump(mode="json"))
+            return
+        console.print(
+            f"{said.backend}: " + ("present" if said.available else "not on that machine"),
+            style=theme.BONE_DIM,
+        )
+        console.print(
+            f"{said.rules} rules, {said.from_registry} from the registry",
+            style=theme.BONE_DIM,
+        )
+        if said.rollback_at:
+            console.print(f"rolling back at {said.rollback_at:%H:%M:%S}", style=theme.SHRIEKER)
+        if not said.remote:
+            console.print(
+                "changing them there is switched off - allow_remote_firewall",
+                style=theme.BONE_DIM,
+            )
+        return
+
     try:
         backend = _backend()
     except WardenError as exc:

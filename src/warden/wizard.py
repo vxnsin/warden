@@ -412,6 +412,12 @@ class Setup(App[dict[str, object] | None]):
                             Input(str(current.firewall_rollback), id="firewall-rollback"),
                             "A change nobody confirms undoes itself. 0 turns that off.",
                         )
+                    yield from self._field(
+                        "Let another machine change the rules",
+                        Switch(current.allow_remote_firewall, id="firewall-remote"),
+                        "Over the API, by a token holder. Reading is always allowed; "
+                        "this is about changing.",
+                    )
                     yield Static("", id="firewall-found", classes="hint")
 
                 with TabPane("Risk", id="tab-risk"):
@@ -619,6 +625,7 @@ class Setup(App[dict[str, object] | None]):
                 "the seconds to wait for a confirmation have to be a number",
                 "firewall-rollback",
             ) from None
+        answers["allow_remote_firewall"] = self._on("firewall-remote")
         if not self._on("firewall-on"):
             # Saying no has to be able to undo a yes.
             return {**answers, "firewall_from_registry": False, "firewall_allow_from": ""}

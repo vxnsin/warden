@@ -198,6 +198,28 @@ Both close themselves: the first when the service's lease lapses, the second
 when its clock runs out. Neither can reach a port warden does not hand out —
 `22` and `3389` are outside the pool, and stay there.
 
+**From somewhere else, if that machine says so.** A deploy that has just
+registered a service can ask the warden holding it to let the port through:
+
+```python
+client.firewall_open("shop-api", source="10.0.0.0/8")
+client.firewall_apply(rollback=60)      # undoes itself unless confirmed
+client.firewall_confirm()
+```
+
+```sh
+warden firewall status --on http://build-01:7010
+warden firewall list   --on http://build-01:7010
+warden firewall open shop-api --on http://build-01:7010
+```
+
+Reading the rules is what a token already allows. **Changing** them needs
+`allow_remote_firewall` set on the machine being asked, and it is off out of
+the box — a warden that will change its own firewall on request, listens beyond
+loopback and asks for no token is a way through the firewall rather than one,
+and `warden doctor` fails on exactly that. Everything asked for this way still
+passes every bound below: the pool, the declared networks, the service's lease.
+
 [Firewall](https://github.com/vxnsin/warden/wiki/Firewall) has the whole of it,
 including the bounds a rule from the registry can never cross.
 
@@ -321,7 +343,7 @@ The wiki is the long form. This page is the tour.
 
 - **The registry binds to loopback and has no token by default.** Set
   `WARDEN_TOKEN` before binding it anywhere else.
-- **The registry cannot open a port by itself.** A rule that comes from it may only ever touch a port inside the pool, may only reach networks declared in advance, and closes when the service's lease does. `firewall_from_registry` is off until you turn it on.
+- **The registry cannot open a port by itself.** A rule that comes from it may only ever touch a port inside the pool, may only reach networks declared in advance, and closes when the service's lease does. `firewall_from_registry` is off until you turn it on, and `allow_remote_firewall` decides separately whether anybody over the API may ask.
 - **`WARDEN_ALLOW_KILL` is off on purpose.** Stopping processes over the API is
   a much bigger thing to hand out than a port number. `warden kill` on the
   command line acts locally and never asks the API.
