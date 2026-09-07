@@ -4,7 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from warden.cli import app, shared
-from warden.core import config
+from warden.core import config, happenings
 from warden.models import WebhookStatus
 
 runner = CliRunner()
@@ -270,3 +270,55 @@ def test_the_dashboard_says_so_rather_than_falling_over(monkeypatch: pytest.Monk
     assert result.exit_code == 1
     assert "cannot draw a screen" in result.stderr
     assert "warden ls" in result.stderr
+
+
+def test_every_event_can_be_posted_at_once(monkeypatch: pytest.MonkeyPatch):
+    """Thirteen kinds of message, without waiting for thirteen things to happen."""
+    posted: list[str] = []
+    monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/hook")
+    monkeypatch.setattr(
+        shared, "send_one", lambda settings, event=None: posted.append(event.full) or None
+    )
+    result = runner.invoke(app, ["webhook", "--all"])
+    assert result.exit_code == 0
+    assert posted == list(happenings.NAMES)
+    assert "node.stale" in result.stdout
+
+
+def test_one_named_event_is_the_one_that_goes(monkeypatch: pytest.MonkeyPatch):
+    posted: list[str] = []
+    monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/hook")
+    monkeypatch.setattr(
+        shared, "send_one", lambda settings, event=None: posted.append(event.full) or None
+    )
+    assert runner.invoke(app, ["webhook", "--event", "firewall.applied"]).exit_code == 0
+    assert posted == ["firewall.applied"]
+
+
+def test_the_bare_name_an_older_warden_used_still_works(monkeypatch: pytest.MonkeyPatch):
+    posted: list[str] = []
+    monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/hook")
+    monkeypatch.setattr(
+        shared, "send_one", lambda settings, event=None: posted.append(event.full) or None
+    )
+    assert runner.invoke(app, ["webhook", "--event", "expired"]).exit_code == 0
+    assert posted == ["port.expired"]
+
+
+def test_an_event_nobody_has_is_refused_with_the_list(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/hook")
+    result = runner.invoke(app, ["webhook", "--event", "nonsense"])
+    assert result.exit_code == 1
+    assert "no event called" in result.stderr
+
+
+def test_one_that_never_arrives_out_of_many_is_still_a_failure(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("WARDEN_WEBHOOK", "https://chat.example/hook")
+    monkeypatch.setattr(
+        shared,
+        "send_one",
+        lambda settings, event=None: "timed out" if event.scope == "node" else None,
+    )
+    result = runner.invoke(app, ["webhook", "--all"])
+    assert result.exit_code == 1
+    assert "timed out" in result.stdout

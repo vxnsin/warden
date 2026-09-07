@@ -12,6 +12,7 @@ import httpx
 
 from warden import __version__, theme
 from warden.client import WardenClient
+from warden.core import installed
 from warden.core.config import Settings, config_file, insecure
 from warden.errors import NotPermittedError, WardenError
 from warden.models import Health
@@ -251,8 +252,26 @@ def _updates(client: WardenClient) -> list[Check]:
     if status.reason:
         return [Check(NOTE, f"could not check for updates - {status.reason}")]
     if status.available and status.latest:
-        return [Check(WARN, f"warden {status.latest} is out, this is {status.current}")]
-    return [Check(OK, f"warden {status.current} is the newest there is")]
+        return [
+            Check(WARN, f"warden {status.latest} is out, this is {status.current}"),
+            *_how_installed(),
+        ]
+    return [Check(OK, f"warden {status.current} is the newest there is"), *_wrong_name()]
+
+
+def _how_installed() -> list[Check]:
+    """The command that would actually replace this copy."""
+    found = installed.how()
+    if not found.command:
+        return [Check(NOTE, f"warden is {found.said}, and there is no telling how to update it")]
+    return [Check(NOTE, f"warden is {found.said} - update it with `{found.command}`")]
+
+
+def _wrong_name() -> list[Check]:
+    """Worth saying even when nothing is out: the name it was installed under
+    belongs to a different project, so upgrading it fetches theirs."""
+    found = installed.how()
+    return [Check(WARN, f"{found.note} - `{found.command}`")] if found.wrong else []
 
 
 def examine(client: WardenClient, settings: Settings) -> list[Check]:

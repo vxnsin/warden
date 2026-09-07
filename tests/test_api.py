@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from warden.api import create_app
+from warden.core import installed
 from warden.core.config import Settings
 from warden.fleet import aggregate
 
@@ -423,12 +424,20 @@ def test_updating_over_the_api_is_off_by_default(client: TestClient):
     assert "WARDEN_ALLOW_REMOTE_UPDATE" in response.json()["detail"]
 
 
-def test_a_warden_allowed_to_update_still_needs_to_know_how(settings: Settings):
+def test_a_warden_allowed_to_update_still_needs_a_command_it_can_run(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+):
+    """A checkout updates with two commands and a shell, which warden will not run."""
+    monkeypatch.setattr(
+        installed,
+        "how",
+        lambda: installed.Install("a checkout", "/x", "git pull && uv sync", runnable=False),
+    )
     willing = settings.model_copy(update={"allow_remote_update": True})
     with TestClient(create_app(willing)) as client:
         response = client.post("/v1/update")
         assert response.status_code == 403
-        assert "WARDEN_UPDATE_COMMAND" in response.json()["detail"]
+        assert "git pull" in response.json()["detail"]
 
 
 def test_either_token_may_ask_a_warden_to_update_itself(settings: Settings):

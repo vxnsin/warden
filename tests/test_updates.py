@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from warden import __version__
-from warden.core import updates
+from warden.core import installed, updates
 from warden.core.config import Settings
 from warden.errors import NotPermittedError, UpdateFailedError
 
@@ -146,8 +146,34 @@ def test_updating_is_refused_unless_it_is_switched_on():
         updates.apply(settings(update_command="echo hi"))
 
 
-def test_a_warden_with_no_command_does_not_know_how_to_update():
-    with pytest.raises(NotPermittedError, match="no WARDEN_UPDATE_COMMAND"):
+def test_a_warden_with_no_command_updates_the_way_it_was_installed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Nothing written down is not nothing known: how it got here says how it leaves."""
+    monkeypatch.setattr(
+        installed, "how", lambda: installed.Install("pipx", "/x", "pipx upgrade warden-ports")
+    )
+    monkeypatch.setattr(updates, "_run", lambda command, timeout: command)
+    assert updates.apply(settings(allow_remote_update=True)) == "pipx upgrade warden-ports"
+
+
+def test_a_warden_that_cannot_be_updated_by_one_command_says_which_one(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        installed,
+        "how",
+        lambda: installed.Install("a checkout", "/x", "git pull && uv sync", runnable=False),
+    )
+    with pytest.raises(NotPermittedError, match="git pull"):
+        updates.apply(settings(allow_remote_update=True))
+
+
+def test_a_warden_with_nothing_to_go_on_says_to_write_a_command_down(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(installed, "how", lambda: installed.Install("unknown", "/x"))
+    with pytest.raises(NotPermittedError, match="update_command"):
         updates.apply(settings(allow_remote_update=True))
 
 
@@ -226,15 +252,25 @@ def test_the_check_works_with_no_warden_running(monkeypatch: pytest.MonkeyPatch)
     assert asked == ["https://api.github.com/repos/vxnsin/warden/releases/latest"]
 
 
-def test_updating_here_needs_a_command_but_not_the_api_switch():
+def test_updating_here_does_not_need_the_api_switch(monkeypatch: pytest.MonkeyPatch):
     """The gate is about a request moving this machine, not a person at it."""
-    with pytest.raises(NotPermittedError, match="no WARDEN_UPDATE_COMMAND"):
-        updates.run_here(settings(allow_remote_update=True))
+    monkeypatch.setattr(
+        installed, "how", lambda: installed.Install("pipx", "/x", "pipx upgrade warden-ports")
+    )
+    monkeypatch.setattr(updates, "_run", lambda command, timeout: command)
+    assert updates.run_here(settings()) == "pipx upgrade warden-ports"
+
+
+def test_what_was_written_down_beats_what_was_worked_out(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        installed, "how", lambda: installed.Install("pipx", "/x", "pipx upgrade warden-ports")
+    )
+    assert updates._chosen(settings(update_command="say hello")) == "say hello"
 
 
 def test_updating_here_runs_the_command_without_allow_remote_update(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(updates, "_run", lambda settings, timeout: "Successfully installed")
+    monkeypatch.setattr(updates, "_run", lambda command, timeout: "Successfully installed")
     said = updates.run_here(settings(update_command="echo hello", allow_remote_update=False))
     assert said == "Successfully installed"

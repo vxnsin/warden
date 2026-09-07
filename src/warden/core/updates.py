@@ -14,6 +14,7 @@ import httpx
 from packaging.version import InvalidVersion, Version
 
 from warden import __version__
+from warden.core import installed
 from warden.core.config import Settings
 from warden.errors import NotPermittedError, UpdateFailedError
 from warden.models import UpdateStatus
@@ -127,6 +128,14 @@ def check_now(settings: Settings) -> UpdateStatus:
     return asyncio.run(once())
 
 
+def would_run(settings: Settings) -> str | None:
+    """The command that would update this machine, or nothing if there is none."""
+    try:
+        return _chosen(settings)
+    except NotPermittedError:
+        return installed.how().command
+
+
 def run_here(settings: Settings, timeout: float = 300.0) -> str:
     """Update this machine because a person here asked.
 
@@ -134,12 +143,7 @@ def run_here(settings: Settings, timeout: float = 300.0) -> str:
     move this machine. Somebody typing the command on it is already the
     authority the gate exists to protect.
     """
-    if not settings.update_command:
-        raise NotPermittedError(
-            "no WARDEN_UPDATE_COMMAND is set, so warden does not know how to "
-            "update itself here - `uv tool upgrade warden-ports` is the usual one"
-        )
-    return _run(settings, timeout)
+    return _run(_chosen(settings), timeout)
 
 
 def _arguments(command: str) -> str | list[str]:
@@ -159,23 +163,42 @@ def apply(settings: Settings, timeout: float = 300.0) -> str:
             "updating over the API is switched off - "
             "set WARDEN_ALLOW_REMOTE_UPDATE=true on this warden to allow it"
         )
-    if not settings.update_command:
+    return _run(_chosen(settings), timeout)
+
+
+def _chosen(settings: Settings) -> str:
+    """The command that updates this machine, or why there is not one.
+
+    Written down beats worked out: a machine with a `update_command` is a
+    machine somebody has already decided about. Without one, how warden got
+    here says how it leaves - and some ways of getting here have no single
+    command at all, which is worth saying rather than guessing at.
+    """
+    if settings.update_command:
+        return settings.update_command
+    found = installed.how()
+    if found.command and found.runnable:
+        return found.command
+    if found.command:
         raise NotPermittedError(
-            "this warden has no WARDEN_UPDATE_COMMAND, so it does not know how to update itself"
+            f"warden is {found.said}, which updates with `{found.command}` - "
+            "run it yourself, or set update_command to say what this machine means by it"
         )
+    raise NotPermittedError(
+        f"warden is {found.said}, and there is no telling how to update that - "
+        "set update_command to say what this machine means by it"
+    )
 
-    return _run(settings, timeout)
 
-
-def _run(settings: Settings, timeout: float) -> str:
-    """Run the configured command and report what it said."""
-    logger.info("updating: %s", settings.update_command)
+def _run(command: str, timeout: float) -> str:
+    """Run the command and report what it said."""
+    logger.info("updating: %s", command)
     try:
         finished = subprocess.run(
             # Windows parses a command line itself, and splitting it with POSIX
             # rules first would eat the backslashes out of every path on the
             # machine. No shell either way: the command is run as it is written.
-            _arguments(settings.update_command or ""),
+            _arguments(command),
             capture_output=True,
             text=True,
             timeout=timeout,
