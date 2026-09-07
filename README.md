@@ -45,7 +45,7 @@ pip and a checkout.
 | **Remembers** | `warden history 8000` answers what had this port last week. |
 | **Says it as it happens** | A live event stream, and webhooks for Discord, Slack, Teams or your own endpoint. [Events and webhooks](https://github.com/vxnsin/warden/wiki/Events-and-webhooks) |
 | **Writes your proxy config** | `warden export caddy` turns the registry into a Caddyfile. [Reverse proxy](https://github.com/vxnsin/warden/wiki/Reverse-proxy) |
-| **Reads a project file** | `warden.toml` says which ports a project needs; `warden apply` makes it true. [Projects](https://github.com/vxnsin/warden/wiki/Projects) |
+| **Reads a project file** | `warden.project.toml` says which ports a project needs; `warden apply` makes it true. [Projects](https://github.com/vxnsin/warden/wiki/Projects) |
 | **Decides what may cross** | A firewall over nftables, iptables, pf or Windows, where every change undoes itself unless you confirm it. [Firewall](https://github.com/vxnsin/warden/wiki/Firewall) |
 | **Spans machines** | One hub, many wardens, one view. [Cluster](https://github.com/vxnsin/warden/wiki/Cluster) |
 | **Answers for itself** | `warden doctor` replaces four commands and a guess. [Troubleshooting](https://github.com/vxnsin/warden/wiki/Troubleshooting) |
@@ -85,7 +85,7 @@ anything unmarked arrived some other way.
 ### Let a project say what it needs
 
 ```toml
-# warden.toml, beside the code
+# warden.project.toml, beside the code
 [project]
 name = "shop"
 
@@ -273,7 +273,7 @@ The wiki is the long form. This page is the tour.
 | [One machine](https://github.com/vxnsin/warden/wiki/One-machine) | The usual setup: a registry for your own projects |
 | [Ports and processes](https://github.com/vxnsin/warden/wiki/Ports-and-processes) | Seeing and freeing ports, no server needed |
 | [Python client](https://github.com/vxnsin/warden/wiki/Python-client) | Asking for a port from your own code |
-| [Projects](https://github.com/vxnsin/warden/wiki/Projects) | A `warden.toml` beside the code, and `warden apply` |
+| [Projects](https://github.com/vxnsin/warden/wiki/Projects) | A `warden.project.toml` beside the code, and `warden apply` |
 | [Events and webhooks](https://github.com/vxnsin/warden/wiki/Events-and-webhooks) | Hearing about it as it happens, in chat or your own endpoint |
 | [Reverse proxy](https://github.com/vxnsin/warden/wiki/Reverse-proxy) | Turning the registry into a Caddyfile, nginx or Traefik |
 | [Firewall](https://github.com/vxnsin/warden/wiki/Firewall) | Deciding what may cross, and taking over from ufw or firewalld |

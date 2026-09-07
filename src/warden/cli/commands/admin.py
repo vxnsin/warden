@@ -139,6 +139,39 @@ def _ask_about_webhooks(answers: dict[str, object], current: Settings) -> None:
             console.print("  It arrived.", style=theme.MOSS)
 
 
+def _ask_about_the_firewall(answers: dict[str, object], current: Settings) -> None:
+    """Whether the registry may open its own ports, and where to."""
+    from warden.firewall.adopt import managing
+
+    found = managing()
+    if found:
+        console.print(
+            f"  {theme.listed(found)} is holding this machine - "
+            "`warden firewall adopt` reads its rules and takes over from it",
+            style=theme.BONE_DIM,
+        )
+
+    answers["firewall_rollback"] = typer.prompt(
+        "Seconds to confirm a firewall change", default=current.firewall_rollback, type=int
+    )
+    if not typer.confirm(
+        "Let the registry open its own ports?", default=current.firewall_from_registry
+    ):
+        answers["firewall_from_registry"] = False
+        answers["firewall_allow_from"] = ""
+        return
+
+    console.print(
+        "  Nothing declared is nothing allowed, and a port outside the pool is "
+        "never reachable this way.",
+        style=theme.BONE_DIM,
+    )
+    answers["firewall_from_registry"] = True
+    answers["firewall_allow_from"] = typer.prompt(
+        "  Networks it may open to", default=", ".join(sorted(current.firewall_allow_from))
+    )
+
+
 def _setup_questions() -> dict[str, object]:
     """The same questions, one at a time, for anything without a terminal."""
     _greet()
@@ -178,6 +211,7 @@ def _setup_questions() -> dict[str, object]:
         )
 
     _ask_about_webhooks(answers, current)
+    _ask_about_the_firewall(answers, current)
 
     answers["allow_kill"] = typer.confirm(
         "Allow stopping processes over the API?", default=current.allow_kill

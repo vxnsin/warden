@@ -118,8 +118,8 @@ def _applied_table(done: Applied) -> Table:
 @app.command()
 def apply(
     file: Annotated[
-        Path, typer.Option("--file", "-f", help="Which manifest to read.")
-    ] = Path(manifest.FILENAME),
+        Path | None, typer.Option("--file", "-f", help="Which manifest to read.")
+    ] = None,
     env: Annotated[
         Path | None, typer.Option(help="Also write the ports into this env file.")
     ] = None,
@@ -130,15 +130,29 @@ def apply(
     token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
-    """Register everything a project's warden.toml asks for.
+    """Register everything a project's warden.project.toml asks for.
 
     Running it twice changes nothing the second time. It renews what is there
     and never shuffles a running project onto different ports.
     """
+    found = file or manifest.here()
+    if found is None:
+        raise _fail(
+            WardenError(
+                f"no {manifest.FILENAME} here - write one, or say --file"
+            )
+        )
     try:
-        wanted = manifest.load(file)
+        wanted = manifest.load(found)
     except WardenError as exc:
         raise _fail(exc) from exc
+
+    if manifest.outgrown(found):
+        errors.print(
+            f"{found.name} is also what the settings file is called. Rename this one "
+            f"to {manifest.FILENAME} - warden will stop looking for the old name.",
+            style=theme.SHRIEKER,
+        )
 
     with shared._client(url, token) as client:
         try:

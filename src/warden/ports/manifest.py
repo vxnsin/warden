@@ -14,7 +14,28 @@ from pathlib import Path
 
 from warden.errors import WardenError
 
-FILENAME = "warden.toml"
+FILENAME = "warden.project.toml"
+
+# What it used to be called, which is also the name of the settings file that
+# `warden setup` writes in the config directory. Two files with one name in two
+# places was a question waiting to be asked by somebody debugging at midnight.
+FORMERLY = "warden.toml"
+
+
+def here(directory: Path | None = None) -> Path | None:
+    """The manifest in a directory, whichever of the two names it goes by."""
+    where = directory or Path.cwd()
+    for name in (FILENAME, FORMERLY):
+        candidate = where / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def outgrown(path: Path) -> bool:
+    """Whether this one is still using the name the settings file also has."""
+    return path.name == FORMERLY
+
 
 PROJECT_KEYS = frozenset({"name", "host"})
 SERVICE_KEYS = frozenset(

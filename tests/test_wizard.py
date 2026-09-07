@@ -362,3 +362,65 @@ def test_a_narrow_hint_keeps_the_keys_that_look_like_nothing():
         assert len(hints) < 60
 
     asking(scenario, size=(60, 16))
+
+
+def test_the_firewall_questions_are_hidden_until_they_are_earned():
+    async def scenario(app: Setup, pilot) -> None:
+        assert not app.query_one("#firewall-extra").display
+        app.query_one("#firewall-on", Switch).value = True
+        await pilot.pause()
+        assert app.query_one("#firewall-extra").display
+
+    asking(scenario)
+
+
+def test_saying_yes_without_naming_a_network_is_refused():
+    """Nothing declared is nothing allowed, and the screen says which is missing."""
+
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#firewall-on", Switch).value = True
+        await pilot.pause()
+        app.query_one("#firewall-from", Input).value = ""
+        await pilot.press("ctrl+s")
+        assert "name the networks" in text_of(app, "#status")
+        assert app.focused is app.query_one("#firewall-from")
+        await pilot.press("ctrl+q")
+
+    assert asking(scenario) is None
+
+
+def test_the_firewall_answers_are_written_down():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#firewall-on", Switch).value = True
+        await pilot.pause()
+        app.query_one("#firewall-from", Input).value = "10.0.0.0/8"
+        app.query_one("#firewall-rollback", Input).value = "30"
+        await pilot.press("ctrl+s")
+
+    answers = asking(scenario)
+    assert answers["firewall_from_registry"] is True
+    assert answers["firewall_allow_from"] == "10.0.0.0/8"
+    assert answers["firewall_rollback"] == 30
+
+
+def test_saying_no_takes_the_permission_back_off():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#firewall-on", Switch).value = False
+        await pilot.pause()
+        await pilot.press("ctrl+s")
+
+    answers = asking(
+        scenario, settings(firewall_from_registry=True, firewall_allow_from="10.0.0.0/8")
+    )
+    assert answers["firewall_from_registry"] is False
+    assert answers["firewall_allow_from"] == ""
+
+
+def test_a_confirmation_window_that_is_not_a_number_is_refused():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#firewall-rollback", Input).value = "a while"
+        await pilot.press("ctrl+s")
+        assert "have to be a number" in text_of(app, "#status")
+        await pilot.press("ctrl+q")
+
+    assert asking(scenario) is None
