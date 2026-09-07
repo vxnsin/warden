@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 
 from warden.errors import WardenError
 from warden.firewall.model import ANYWHERE, Action, Direction, Origin, Protocol, Rule
@@ -80,6 +81,7 @@ def rule_for(
     protocol: str | None = None,
     comment: str | None = None,
     limit: str | None = None,
+    for_seconds: int | None = None,
 ) -> Rule:
     """A port, a port range, or a name out of the catalogue.
 
@@ -108,4 +110,7 @@ def rule_for(
         origin=origin,
         comment=comment,
         limit=limit,
+        expires_at=(
+            datetime.now(UTC) + timedelta(seconds=for_seconds) if for_seconds else None
+        ),
     )

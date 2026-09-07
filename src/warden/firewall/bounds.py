@@ -130,7 +130,13 @@ def closed_by(services: list[Registration], rules: list[Rule], now: datetime) ->
     return [
         rule
         for rule in rules
-        if rule.origin is Origin.REGISTRY
-        and rule.service is not None
-        and (rule.expired(now) or not any((rule.service, port) in held for port in rule.ports))
+        # Whoever wrote it: a rule whose clock has run out is not a rule any
+        # more, and a hole that outlives what it was opened for is how this
+        # idea usually ends.
+        if rule.expired(now)
+        or (
+            rule.origin is Origin.REGISTRY
+            and rule.service is not None
+            and not any((rule.service, port) in held for port in rule.ports)
+        )
     ]
