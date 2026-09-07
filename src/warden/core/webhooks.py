@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 from collections.abc import Mapping
+from typing import NamedTuple
 
 from warden import __version__
 from warden.models import NODE, PORT, Event
@@ -33,43 +34,83 @@ VERBS = {
 }
 
 
+class Look(NamedTuple):
+    """How one event presents itself: a colour, an icon, and the words.
+
+    A tuple rather than a dataclass because `colour, words = looks(...)` is how
+    this has been read since 0.3.0, and the two that were there stay first.
+    """
+
+    colour: int
+    words: str
+    icon: str = "*"
+    # What Teams calls a container style. Not something to configure: it comes
+    # from what the event means, not from what colour somebody chose for it.
+    tone: str = "default"
+
+
+GOOD = "good"
+WARN = "warning"
+BAD = "attention"
+CALM = "accent"
+
+
 # What each one looks like in a chat window. Overridable one at a time, so
 # `webhook_colours = "node.stale=#e5544b"` changes that one and leaves the rest.
-LOOKS: dict[str, tuple[int, str]] = {
-    "port.registered": (0x4C9A5B, "took a port"),
-    "port.renewed": (0x4A7EA8, "kept its port"),
-    "port.moved": (0xC8892A, "moved"),
-    "port.released": (0x6E6E6E, "gave up its port"),
-    "port.expired": (0xA8434A, "lost its port"),
-    "node.joined": (0x4C9A5B, "reported in"),
-    "node.returned": (0x4C9A5B, "is answering again"),
-    "node.stale": (0xA8434A, "has gone quiet"),
-    "node.forgotten": (0x6E6E6E, "was forgotten"),
-    "firewall.applied": (0xC8892A, "ruleset applied"),
-    "firewall.confirmed": (0x4C9A5B, "ruleset kept"),
-    "firewall.rolled_back": (0xA8434A, "rolled itself back"),
-    "firewall.restored": (0x6E6E6E, "snapshot restored"),
+LOOKS: dict[str, Look] = {
+    "port.registered": Look(0x4C9A5B, "took a port", "\N{INBOX TRAY}", GOOD),
+    "port.renewed": Look(
+        0x4A7EA8,
+        "kept its port",
+        "\N{ANTICLOCKWISE DOWNWARDS AND UPWARDS OPEN CIRCLE ARROWS}",
+        CALM,
+    ),
+    "port.moved": Look(0xC8892A, "moved", "\N{TWISTED RIGHTWARDS ARROWS}", WARN),
+    "port.released": Look(0x6E6E6E, "gave up its port", "\N{OUTBOX TRAY}"),
+    "port.expired": Look(0xA8434A, "lost its port", "\N{HOURGLASS}", BAD),
+    "node.joined": Look(0x4C9A5B, "reported in", "\N{LARGE GREEN CIRCLE}", GOOD),
+    "node.returned": Look(0x4C9A5B, "is answering again", "\N{LARGE BLUE CIRCLE}", GOOD),
+    "node.stale": Look(0xA8434A, "has gone quiet", "\N{LARGE RED CIRCLE}", BAD),
+    "node.forgotten": Look(0x6E6E6E, "was forgotten", "\N{MEDIUM BLACK CIRCLE}"),
+    "firewall.applied": Look(0xC8892A, "ruleset applied", "\N{BRICK}", WARN),
+    "firewall.confirmed": Look(0x4C9A5B, "ruleset kept", "\N{LOCK}", GOOD),
+    "firewall.rolled_back": Look(
+        0xA8434A,
+        "rolled itself back",
+        "\N{BLACK LEFT-POINTING DOUBLE TRIANGLE WITH VERTICAL BAR}",
+        BAD,
+    ),
+    "firewall.restored": Look(0x6E6E6E, "snapshot restored", "\N{PACKAGE}"),
 }
 
-PLAIN = (0x6E6E6E, "happened")
+PLAIN = Look(0x6E6E6E, "happened")
+
+# An icon somebody wanted gone. A chat window that renders emoji badly, or a
+# channel that would rather not have them, should not have to be argued with.
+NOTHING = "-"
 
 
 def looks(
     event: Event,
     colours: Mapping[str, str] | None = None,
     titles: Mapping[str, str] | None = None,
-) -> tuple[int, str]:
-    """The colour and the words for one event, with any overrides applied.
+    icons: Mapping[str, str] | None = None,
+) -> Look:
+    """How one event presents itself, with any overrides applied.
 
-    Both are named one event at a time, so setting `node.stale` leaves the
-    other twelve with the ones they came with.
+    Each is named one event at a time, so setting `node.stale` leaves the
+    other twelve with what they came with.
     """
-    colour, said = LOOKS.get(event.full, PLAIN)
+    look = LOOKS.get(event.full, PLAIN)
     chosen = (colours or {}).get(event.full)
-    if chosen:
-        colour = _colour(chosen, colour)
-    return colour, (titles or {}).get(event.full) or said
-
+    said = (titles or {}).get(event.full)
+    drawn = (icons or {}).get(event.full)
+    return Look(
+        _colour(chosen, look.colour) if chosen else look.colour,
+        said or look.words,
+        "" if drawn == NOTHING else (drawn or look.icon),
+        look.tone,
+    )
 
 def _colour(said: str, fallback: int) -> int:
     """`#4c9a5b` or `4c9a5b`. Anything else keeps the one it came with, because
@@ -82,13 +123,21 @@ def _colour(said: str, fallback: int) -> int:
 
 def sentence(event: Event, node: str, titles: Mapping[str, str] | None = None) -> str:
     """One line, readable by someone who has never heard of warden."""
-    said = (titles or {}).get(event.full)
-    if event.scope == PORT and not said:
+    return line(event, node, looks(event, None, titles))
+
+
+def line(event: Event, node: str, look: Look) -> str:
+    """The same, once the colour and the words have already been worked out."""
+    default = LOOKS.get(event.full, PLAIN).words
+    if event.scope == PORT and look.words == default:
         return f"{event.name} {VERBS.get(event.action, event.action)} {event.address} on {node}"
-    _, title = looks(event, None, titles)
-    who = event.subject or event.name or event.scope
     where = "" if event.scope == NODE else f" on {node}"
-    return f"{who} {title}{where}"
+    return f"{about(event)} {look.words}{where}"
+
+
+def about(event: Event) -> str:
+    """What the event happened to: a service, a node, a firewall backend."""
+    return event.subject or event.name or event.scope
 
 
 def _title(event: Event) -> str:
@@ -96,20 +145,23 @@ def _title(event: Event) -> str:
     return f"{event.full} - {event.subject}" if event.subject else event.full
 
 
-def facts(event: Event, node: str) -> list[tuple[str, str]]:
-    """The fields worth showing, which depend on what kind of thing this is."""
+def facts(event: Event, node: str, *, with_node: bool = True) -> list[tuple[str, str]]:
+    """The fields worth showing, which depend on what kind of thing this is.
+
+    `with_node` off for the shapes that put the node in a footer, where it
+    belongs: it is the same on every message in the channel.
+    """
     if event.scope != PORT:
         pairs = [(key, str(said)) for key, said in event.body.items() if said not in (None, "")]
-        return [("what", event.full), *pairs, ("node", node)]
-
-    pairs = [("service", event.name), ("kind", event.kind)]
-    if event.project:
-        pairs.append(("project", event.project))
-    pairs.append(("address", event.address))
-    if event.pid:
-        pairs.append(("pid", str(event.pid)))
-    pairs.append(("node", node))
-    return pairs
+        pairs = [("what", event.full), *pairs]
+    else:
+        pairs = [("service", event.name), ("kind", event.kind)]
+        if event.project:
+            pairs.append(("project", event.project))
+        pairs.append(("address", event.address))
+        if event.pid:
+            pairs.append(("pid", str(event.pid)))
+    return [*pairs, ("node", node)] if with_node else pairs
 
 
 # What a port event carries and nothing else does. Sending them empty on a
@@ -117,13 +169,11 @@ def facts(event: Event, node: str) -> list[tuple[str, str]]:
 OF_A_PORT = ("name", "kind", "project", "host", "port", "pid")
 
 
-def _plain(
-    event: Event,
-    node: str,
-    colours: Mapping[str, str] | None = None,
-    titles: Mapping[str, str] | None = None,
-) -> dict[str, object]:
+def _plain(event: Event, node: str, look: Look) -> dict[str, object]:
     """The event as it is, with only the fields this kind of event has.
+
+    No colour and no icon: whatever reads this decides how it should look,
+    which is the reason to have it.
 
     A port event keeps the shape 0.2.0 sent, down to the field order, so a
     reader written against it does not notice that anything widened.
@@ -138,69 +188,130 @@ def _plain(
     return payload
 
 
-def _discord(
-    event: Event,
-    node: str,
-    colours: Mapping[str, str] | None = None,
-    titles: Mapping[str, str] | None = None,
-) -> dict[str, object]:
+def _headline(look: Look, event: Event) -> str:
+    """The icon and the subject, or just the subject where there is no icon."""
+    return f"{look.icon} {about(event)}".strip()
+
+
+def detail(event: Event, node: str, look: Look) -> str:
+    """The sentence, without repeating the subject the heading already shows."""
+    said = line(event, node, look)
+    heading = f"{about(event)} "
+    return said[len(heading) :] if said.startswith(heading) else said
+
+
+# What the heading already says. Repeating it in a field below is how a message
+# ends up looking like a form rather than a sentence.
+ALREADY_SAID = frozenset({"service", "what"})
+
+
+def details(event: Event) -> list[tuple[str, str]]:
+    """The facts worth a field of their own in a chat window."""
+    return [
+        (name, value)
+        for name, value in facts(event, "", with_node=False)
+        if name not in ALREADY_SAID
+    ]
+
+
+def _discord(event: Event, node: str, look: Look) -> dict[str, object]:
+    # An author line for the event name, a title for the thing it happened to,
+    # and the node in the footer, because the node is the same on every message
+    # in the channel and does not deserve a field of its own.
     return {
         "embeds": [
             {
-                "title": _title(event),
-                "description": sentence(event, node, titles),
-                "color": looks(event, colours, titles)[0],
+                "author": {"name": _title(event)},
+                "title": _headline(look, event),
+                "description": detail(event, node, look),
+                "color": look.colour,
                 "timestamp": event.at.isoformat(),
                 "fields": [
-                    {"name": name, "value": value, "inline": True}
-                    for name, value in facts(event, node)
+                    {"name": name, "value": f"`{value}`", "inline": True}
+                    for name, value in details(event)
                 ],
+                "footer": {"text": f"warden {__version__} on {node}"},
             }
         ]
     }
 
 
-def _slack(
-    event: Event,
-    node: str,
-    colours: Mapping[str, str] | None = None,
-    titles: Mapping[str, str] | None = None,
-) -> dict[str, object]:
-    # `text` as well as `blocks`, because that is what a phone notification
-    # shows and what a client too old for blocks falls back to.
-    return {
-        "text": sentence(event, node, titles),
-        "blocks": [
+# Slack renders at most ten of these side by side and silently drops the rest.
+SLACK_FIELDS = 10
+
+
+def _slack(event: Event, node: str, look: Look) -> dict[str, object]:
+    # Everything inside one attachment, which is the only way Slack will draw a
+    # coloured bar down the side of a message.
+    blocks: list[dict[str, object]] = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{_headline(look, event)}*\n{detail(event, node, look)}",
+            },
+        }
+    ]
+    shown = details(event)[:SLACK_FIELDS]
+    if shown:
+        blocks.append(
             {
                 "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*{event.action}* {sentence(event, node, titles)}",
-                },
-            },
-            {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": " | ".join(
-                            f"{name}: `{value}`" for name, value in facts(event, node)
-                        ),
-                    }
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*{name}*\n`{value}`"} for name, value in shown
                 ],
-            },
-        ],
+            }
+        )
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": f"`{event.full}` - {node} - {_when(event)}"}
+            ],
+        }
+    )
+    # `text` as well as the blocks, because that is what a phone notification
+    # shows and what a client too old for blocks falls back to.
+    return {
+        "text": line(event, node, look),
+        "attachments": [{"color": f"#{look.colour:06x}", "blocks": blocks}],
     }
 
 
-def _teams(
-    event: Event,
-    node: str,
-    colours: Mapping[str, str] | None = None,
-    titles: Mapping[str, str] | None = None,
-) -> dict[str, object]:
+def _when(event: Event) -> str:
+    """The time, in whichever timezone the person reading it is sitting in."""
+    stamp = int(event.at.timestamp())
+    return f"<!date^{stamp}^{{date_short_pretty}} {{time}}|{event.at:%Y-%m-%d %H:%M}>"
+
+
+def _teams(event: Event, node: str, look: Look) -> dict[str, object]:
     # An adaptive card inside a message, which is what a Power Automate flow
     # accepts. The old Office 365 connector card is on its way out.
+    #
+    # A card cannot be given a colour, so the header band takes the nearest
+    # thing Teams has a name for - good, warning, attention - and that is why
+    # the tone belongs to the event rather than to the colour somebody chose.
+    heading: list[dict[str, object]] = [
+        {
+            "type": "TextBlock",
+            "text": about(event),
+            "weight": "Bolder",
+            "size": "Medium",
+            "wrap": True,
+        },
+        {"type": "TextBlock", "text": event.full, "isSubtle": True, "spacing": "None"},
+    ]
+    columns: list[dict[str, object]] = []
+    if look.icon:
+        columns.append(
+            {
+                "type": "Column",
+                "width": "auto",
+                "items": [{"type": "TextBlock", "text": look.icon, "size": "Large"}],
+            }
+        )
+    columns.append({"type": "Column", "width": "stretch", "items": heading})
+
     return {
         "type": "message",
         "attachments": [
@@ -212,17 +323,26 @@ def _teams(
                     "version": "1.4",
                     "body": [
                         {
-                            "type": "TextBlock",
-                            "text": sentence(event, node, titles),
-                            "weight": "Bolder",
-                            "wrap": True,
+                            "type": "Container",
+                            "style": look.tone,
+                            "bleed": True,
+                            "items": [{"type": "ColumnSet", "columns": columns}],
                         },
+                        {"type": "TextBlock", "text": detail(event, node, look), "wrap": True},
                         {
                             "type": "FactSet",
                             "facts": [
                                 {"title": name, "value": value}
-                                for name, value in facts(event, node)
+                                for name, value in details(event)
                             ],
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": f"warden {__version__} on {node}",
+                            "isSubtle": True,
+                            "size": "Small",
+                            "spacing": "Medium",
+                            "wrap": True,
                         },
                     ],
                 },
@@ -242,13 +362,14 @@ def render(
     secret: str | None = None,
     colours: Mapping[str, str] | None = None,
     titles: Mapping[str, str] | None = None,
+    icons: Mapping[str, str] | None = None,
 ) -> tuple[bytes, dict[str, str]]:
     """The bytes to post, and the headers to post them with.
 
     Serialised here rather than left to the HTTP client, because a signature
     over a body somebody else re-serialises signs something else.
     """
-    payload = BUILDERS[shape](event, node, colours, titles)
+    payload = BUILDERS[shape](event, node, looks(event, colours, titles, icons))
     body = json.dumps(payload, separators=(",", ":")).encode()
     headers = {
         "Content-Type": "application/json",

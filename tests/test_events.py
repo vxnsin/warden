@@ -380,3 +380,30 @@ def test_the_stream_can_be_piped_somewhere(monkeypatch: pytest.MonkeyPatch):
     result = runner_cli.invoke(app, ["events", "--json"])
     written = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     assert [event["action"] for event in written] == [REGISTERED]
+
+
+def test_the_colour_and_the_words_reach_the_message_that_is_actually_sent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """They were settings that did nothing: `render` was called without them."""
+    sent = posting(monkeypatch, lambda request: httpx.Response(204))
+
+    async def scenario() -> None:
+        bus = EventBus(
+            hooked(
+                webhook_format="discord",
+                webhook_colours={"port.registered": "#123456"},
+                webhook_titles={"port.registered": "grabbed one"},
+                webhook_icons={"port.registered": "SEEN"},
+            )
+        )
+        bus.start()
+        bus.publish(an_event())
+        await until(lambda: bool(sent))
+        await bus.stop()
+
+    asyncio.run(scenario())
+    embed = json.loads(sent[0].content)["embeds"][0]
+    assert embed["color"] == 0x123456
+    assert embed["title"] == "SEEN api"
+    assert "grabbed one" in embed["description"]

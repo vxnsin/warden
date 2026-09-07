@@ -131,17 +131,21 @@ committed, off the request path, and `warden doctor` says when the last one did
 not arrive — because from the inside, a webhook failing all day looks exactly
 like a quiet day.
 
-Each of the thirteen carries a colour and a line of words, and `warden settings
-embed` changes them one event at a time against a preview of the message it
-would send — the rest keep the ones they came with. It is the same two settings
-either way:
+Each of the thirteen carries a colour, an icon and a line of words, and `warden
+settings embed` changes them one event at a time against a preview of the
+message it would send — the rest keep what they came with:
 
 ```toml
 webhook_colours = { "node.stale" = "#e5544b" }
 webhook_titles = { "node.stale" = "has stopped answering" }
+webhook_icons = { "node.stale" = "!" }        # a single - means none at all
 ```
 
-`json` carries neither, because whatever reads it decides how that looks.
+Discord gets an embed with the event above the subject and the node in the
+footer, Slack a coloured attachment with the facts as fields and the time in
+the reader's own timezone, Teams an adaptive card whose header band takes the
+nearest tone the format has a name for. `json` carries none of it, because
+whatever reads it decides how that looks.
 [Events and webhooks](https://github.com/vxnsin/warden/wiki/Events-and-webhooks)
 has where to get an address, the shape of every event, and how to check the
 signature.

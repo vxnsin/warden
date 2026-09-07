@@ -111,6 +111,12 @@ ContentSwitcher:focus-within { border: round $glow_dim; }
 
 .preview-name { padding-top: 1; width: auto; }
 
+/* The colour and the icon are both short, so they share a row and the
+   preview stays above the fold on an 80 by 24 terminal. */
+.name.beside { width: auto; padding: 1 2 0 3; }
+#embed-colour { width: 18; max-width: 18; }
+#embed-icon { width: 10; max-width: 10; }
+
 #embed-preview {
     height: auto;
     padding: 1 2;
@@ -224,6 +230,7 @@ class Setup(App[dict[str, object] | None]):
         # until the whole screen is saved.
         self._colours = dict(self.settings.webhook_colours)
         self._titles = dict(self.settings.webhook_titles)
+        self._icons = dict(self.settings.webhook_icons)
         self._showing: str | None = None
 
     def get_css_variables(self) -> dict[str, str]:
@@ -372,10 +379,11 @@ class Setup(App[dict[str, object] | None]):
                             id="embed-which",
                         ),
                     )
-                    yield from self._field(
-                        "Colour",
-                        Input(placeholder="#4c9a5b", id="embed-colour"),
-                    )
+                    with Horizontal(classes="field"):
+                        yield Label("Colour", classes="name")
+                        yield Input(placeholder="#4c9a5b", id="embed-colour")
+                        yield Label("Icon", classes="name beside")
+                        yield Input(placeholder="!", id="embed-icon")
                     yield from self._field(
                         "Words after the subject",
                         Input(placeholder="has gone quiet", id="embed-words"),
@@ -384,8 +392,9 @@ class Setup(App[dict[str, object] | None]):
                     yield Static("", id="embed-preview")
                     yield Static(
                         "Each event is styled on its own, and the rest keep what they "
-                        "came with. `json` carries neither - it sends the event, and "
-                        "whatever reads it decides how that looks.",
+                        "came with. A single - for the icon means none at all, and "
+                        "`json` carries none of it: it sends the event, and whatever "
+                        "reads it decides how that looks.",
                         classes="hint",
                     )
 
@@ -488,7 +497,7 @@ class Setup(App[dict[str, object] | None]):
         self._reveal()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id in ("embed-colour", "embed-words"):
+        if event.input.id in ("embed-colour", "embed-words", "embed-icon"):
             self._draw_embed()
 
     def on_select_changed(self, event: Select.Changed) -> None:
@@ -521,6 +530,7 @@ class Setup(App[dict[str, object] | None]):
         for said, kept in (
             (self._text("embed-colour"), self._colours),
             (self._text("embed-words"), self._titles),
+            (self._text("embed-icon"), self._icons),
         ):
             if said:
                 kept[which] = said
@@ -532,6 +542,7 @@ class Setup(App[dict[str, object] | None]):
         self._showing = which
         self.query_one("#embed-colour", Input).value = self._colours.get(which, "")
         self.query_one("#embed-words", Input).value = self._titles.get(which, "")
+        self.query_one("#embed-icon", Input).value = self._icons.get(which, "")
         self._draw_embed()
 
     def _draw_embed(self) -> None:
@@ -540,17 +551,28 @@ class Setup(App[dict[str, object] | None]):
         if which is None:
             return
         event = happenings.like(which)
-        tint, words = self._text("embed-colour"), self._text("embed-words")
-        colour, _ = webhooks.looks(event, {which: tint} if tint else None)
-        line = webhooks.sentence(event, self.settings.node, {which: words} if words else None)
+        look = webhooks.looks(
+            event,
+            *({which: said} if said else None for said in self._typed()),
+        )
         shown = Text()
-        shown.append("   ", style=f"on #{colour:06x}")
+        shown.append("   ", style=f"on #{look.colour:06x}")
         shown.append("  ")
-        shown.append(line)
-        for name, value in webhooks.facts(event, self.settings.node)[:3]:
+        shown.append(webhooks._headline(look, event), style=f"bold {theme.BONE}")
+        shown.append("\n      ")
+        shown.append(webhooks.detail(event, self.settings.node, look), style=theme.BONE)
+        for name, value in webhooks.facts(event, self.settings.node, with_node=False)[:3]:
             shown.append(f"\n      {name}  ", style=theme.BONE_DIM)
             shown.append(value, style=theme.BONE)
         self.query_one("#embed-preview", Static).update(shown)
+
+    def _typed(self) -> tuple[str, str, str]:
+        """The colour, the words and the icon, in the order `looks` takes them."""
+        return (
+            self._text("embed-colour"),
+            self._text("embed-words"),
+            self._text("embed-icon"),
+        )
 
     def _on(self, field: str) -> bool:
         return self.query_one(f"#{field}", Switch).value
@@ -613,6 +635,7 @@ class Setup(App[dict[str, object] | None]):
         self._remember_embed()
         answers["webhook_colours"] = dict(self._colours)
         answers["webhook_titles"] = dict(self._titles)
+        answers["webhook_icons"] = dict(self._icons)
         return answers
 
     def _firewall_answers(self) -> dict[str, object]:
