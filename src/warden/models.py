@@ -327,6 +327,9 @@ class RuleRequest(BaseModel):
     direction: Literal["in", "out"] = "in"
     protocol: Literal["tcp", "udp", "icmp", "any"] | None = None
     comment: Plain | None = None
+    # `10/second`, `6/minute`. Checked by the rule it becomes, so an unwritable
+    # rate is a 422 rather than something a backend chokes on.
+    limit: str | None = None
 
 
 class NodeFirewall(FirewallStatus):

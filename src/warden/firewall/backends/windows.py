@@ -33,6 +33,14 @@ VERDICTS = {Action.ALLOW: "allow", Action.DENY: "block", Action.REJECT: "block"}
 
 def line(rule: Rule) -> str:
     """One rule, as netsh would have been told it."""
+    if rule.limit:
+        # Applying it without the limit would mean the same rule lets a great
+        # deal more through here than it does anywhere else, and nothing would
+        # say so. Refusing by name is the smaller surprise.
+        raise NotPermittedError(
+            f"{rule.name} is limited to {rule.limit}, and the Windows firewall has "
+            "no rate limit - apply it without the limit only if you mean to"
+        )
     parts = [
         "netsh advfirewall firewall add rule",
         f'name="{GROUP}: {rule.name}"',

@@ -19,6 +19,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from pydantic import ValidationError
 
 from warden import __version__
 from warden.core import asking, config, metrics, updates
@@ -983,14 +984,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def firewall_write(asked: RuleRequest, rules: Rules) -> firewall.Rule:
         # Through `catalogue.rule_for`, the same words the command line reads,
         # so `ssh` means the same thing typed as it does asked for.
-        rule = catalogue.rule_for(
-            asked.what,
-            action=firewall.Action(asked.action),
-            source=asked.source,
-            direction=firewall.Direction(asked.direction),
-            protocol=asked.protocol,
-            comment=asked.comment,
-        )
+        try:
+            rule = catalogue.rule_for(
+                asked.what,
+                action=firewall.Action(asked.action),
+                source=asked.source,
+                direction=firewall.Direction(asked.direction),
+                protocol=asked.protocol,
+                comment=asked.comment,
+                limit=asked.limit,
+            )
+        except ValidationError as exc:
+            # The rule is where the fields are really checked, so a refusal
+            # there is the caller's mistake and not this warden's failure.
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, exc.errors()[0]["msg"]
+            ) from exc
         rules.save(rule)
         return rule
 

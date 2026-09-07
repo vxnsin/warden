@@ -79,6 +79,7 @@ def rule_for(
     direction: Direction = Direction.IN,
     protocol: str | None = None,
     comment: str | None = None,
+    limit: str | None = None,
 ) -> Rule:
     """A port, a port range, or a name out of the catalogue.
 
@@ -106,4 +107,5 @@ def rule_for(
         source=source,
         origin=origin,
         comment=comment,
+        limit=limit,
     )

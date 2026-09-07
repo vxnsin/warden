@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated
@@ -58,6 +59,26 @@ Interface = Annotated[
 
 ANYWHERE = "any"
 
+# How often something may happen: a count, a slash, and a span of time. Kept to
+# a shape all three backends that can do this already understand, rather than a
+# field somebody can write anything into.
+LIMIT = re.compile(r"^([1-9][0-9]{0,5})/(second|minute|hour|day)$")
+
+Limit = Annotated[
+    str, StringConstraints(pattern=LIMIT.pattern, strip_whitespace=True)
+]
+
+# Seconds in each span, for the backends that count in seconds instead.
+SPANS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
+
+
+def per_second(limit: str) -> tuple[int, int]:
+    """A limit as a count and the seconds it is counted over."""
+    said = LIMIT.match(limit)
+    if said is None:
+        raise ValueError(f"{limit!r} is not a rate")
+    return int(said[1]), SPANS[said[2]]
+
 
 class Rule(BaseModel):
     """One decision about traffic, in terms no firewall backend owns."""
@@ -73,6 +94,9 @@ class Rule(BaseModel):
     destination: str = ANYWHERE
     interface: Interface | None = None
     origin: Origin = Origin.MANUAL
+    # How often this may happen, where the rule lets something through and the
+    # backend can say so. `10/second`, `6/minute`.
+    limit: Limit | None = None
     # Only ever set for a rule that borrowed a registration's lease.
     service: Name | None = None
     expires_at: datetime | None = None

@@ -56,6 +56,14 @@ def _rules() -> store.RuleStore:
     return store.RuleStore(store.Store(Settings().database))
 
 
+def _rate(rule: firewall.Rule) -> Text:
+    return (
+        Text(rule.limit, style=theme.AMETHYST)
+        if rule.limit
+        else Text("-", style=theme.BONE_DIM)
+    )
+
+
 def _what(rule: firewall.Rule) -> str:
     if rule.protocol in (firewall.Protocol.ICMP, firewall.Protocol.ANY):
         return str(rule.protocol)
@@ -66,7 +74,7 @@ def _what(rule: firewall.Rule) -> str:
 
 def _rules_table(rules: list[firewall.Rule]) -> Table:
     table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
-    for column in ("NAME", "DIR", "ACTION", "WHAT", "FROM", "ORIGIN", "UNTIL"):
+    for column in ("NAME", "DIR", "ACTION", "WHAT", "FROM", "RATE", "ORIGIN", "UNTIL"):
         table.add_column(column)
     for rule in rules:
         table.add_row(
@@ -75,6 +83,7 @@ def _rules_table(rules: list[firewall.Rule]) -> Table:
             Text(str(rule.action), style=ACTION_STYLES[rule.action]),
             _what(rule),
             rule.source,
+            _rate(rule),
             Text(str(rule.origin), style=RULE_ORIGINS[rule.origin]),
             Text(theme.until(rule.expires_at), style=theme.SHRIEKER)
             if rule.expires_at
@@ -91,7 +100,9 @@ def _fleet_rules_table(rules: list[dict[str, object]]) -> Table:
     happens to know.
     """
     table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
-    for column in ("NODE", "NAME", "DIR", "ACTION", "WHAT", "FROM", "ORIGIN", "UNTIL"):
+    for column in (
+        "NODE", "NAME", "DIR", "ACTION", "WHAT", "FROM", "RATE", "ORIGIN", "UNTIL"
+    ):
         table.add_column(column)
     for rule in rules:
         action = str(rule.get("action", ""))
@@ -103,6 +114,10 @@ def _fleet_rules_table(rules: list[dict[str, object]]) -> Table:
             Text(action, style=ACTION_STYLES.get(action, "")),
             _spelled(rule),
             str(rule.get("source", "")),
+            Text(
+                str(rule.get("limit") or "-"),
+                style=theme.AMETHYST if rule.get("limit") else theme.BONE_DIM,
+            ),
             Text(origin, style=RULE_ORIGINS.get(origin, "")),
             _until(rule.get("expires_at")),
         )
@@ -230,6 +245,7 @@ def _rule_from(
     direction: firewall.Direction,
     protocol: str | None,
     comment: str | None,
+    limit: str | None = None,
 ) -> firewall.Rule:
     """A port, a port range, or a name out of the catalogue."""
     return catalogue.rule_for(
@@ -239,6 +255,7 @@ def _rule_from(
         direction=direction,
         protocol=protocol,
         comment=comment,
+        limit=limit,
     )
 
 
@@ -263,6 +280,10 @@ def firewall_allow(
     direction: Annotated[str, typer.Option(help="in or out.")] = "in",
     protocol: Annotated[str | None, typer.Option(help="tcp, udp, icmp or any.")] = None,
     comment: Annotated[str | None, typer.Option(help="Why this rule exists.")] = None,
+    limit: Annotated[
+        str | None,
+        typer.Option(help="How often it may happen: 10/second, 6/minute."),
+    ] = None,
     as_json: JsonOption = False,
 ) -> None:
     """Let something through."""
@@ -274,6 +295,7 @@ def firewall_allow(
             direction=firewall.Direction(direction),
             protocol=protocol,
             comment=comment,
+            limit=limit,
         )
     except (WardenError, ValueError) as exc:
         raise _fail(WardenError(str(getattr(exc, "message", exc)))) from exc
@@ -289,6 +311,10 @@ def firewall_deny(
     direction: Annotated[str, typer.Option(help="in or out.")] = "in",
     protocol: Annotated[str | None, typer.Option(help="tcp, udp, icmp or any.")] = None,
     comment: Annotated[str | None, typer.Option(help="Why this rule exists.")] = None,
+    limit: Annotated[
+        str | None,
+        typer.Option(help="How often it may happen: 10/second, 6/minute."),
+    ] = None,
     reject: Annotated[
         bool, typer.Option("--reject", help="Answer instead of saying nothing.")
     ] = False,
@@ -303,6 +329,7 @@ def firewall_deny(
             direction=firewall.Direction(direction),
             protocol=protocol,
             comment=comment,
+            limit=limit,
         )
     except (WardenError, ValueError) as exc:
         raise _fail(WardenError(str(getattr(exc, "message", exc)))) from exc

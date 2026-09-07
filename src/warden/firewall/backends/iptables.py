@@ -13,13 +13,25 @@ from datetime import UTC, datetime
 
 from warden.errors import FirewallError, NotPermittedError
 from warden.firewall.backends.base import Backend
-from warden.firewall.model import Action, Direction, Policy, Protocol, Rule, spelled
+from warden.firewall.model import (
+    Action,
+    Direction,
+    Policy,
+    Protocol,
+    Rule,
+    per_second,
+    spelled,
+)
 
 TIMEOUT = 20.0
 
 VERDICTS = {Action.ALLOW: "ACCEPT", Action.DENY: "DROP", Action.REJECT: "REJECT"}
 
 CHAINS = {Direction.IN: "INPUT", Direction.OUT: "OUTPUT"}
+
+
+# What iptables calls each span. It has no word for a day.
+UNITS = {1: "second", 60: "minute", 3600: "hour", 86400: "day"}
 
 
 def line(rule: Rule) -> str:
@@ -37,6 +49,9 @@ def line(rule: Rule) -> str:
         spoken = spelled(rule.ports, ",").replace("-", ":")
         many = len(rule.ports) > 1 or "-" in spelled(rule.ports)
         parts.append(f"-m multiport --dports {spoken}" if many else f"--dport {spoken}")
+    if rule.limit:
+        count, over = per_second(rule.limit)
+        parts.append(f"-m limit --limit {count}/{UNITS[over]}")
     said = (rule.comment or rule.name).replace('"', "'")[:255]
     parts.append(f'-m comment --comment "{said}"')
     parts.append(f"-j {VERDICTS[rule.action]}")

@@ -60,6 +60,10 @@ def line(rule: Rule) -> str:
     if rule.protocol is Protocol.ICMP:
         parts += " ip protocol icmp"
     parts += _addresses(rule) + _ports(rule)
+    if rule.limit:
+        # Before the verdict, so what exceeds the rate falls through to the
+        # chain policy rather than being let past at speed.
+        parts += f" limit rate {rule.limit}"
     return f"{parts.strip()} {VERDICTS[rule.action]}{_comment(rule)}".strip()
 
 

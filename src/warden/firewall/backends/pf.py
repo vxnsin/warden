@@ -12,7 +12,16 @@ from datetime import UTC, datetime
 
 from warden.errors import FirewallError, NotPermittedError
 from warden.firewall.backends.base import Backend
-from warden.firewall.model import Action, Direction, Policy, Protocol, Rule, runs, spelled
+from warden.firewall.model import (
+    Action,
+    Direction,
+    Policy,
+    Protocol,
+    Rule,
+    per_second,
+    runs,
+    spelled,
+)
 
 TIMEOUT = 20.0
 
@@ -41,7 +50,13 @@ def line(rule: Rule) -> str:
             parts.append("port " + _ports(rule))
     if rule.action is Action.ALLOW and rule.direction is Direction.IN:
         # Without this, the answer to an accepted connection has nowhere to go.
-        parts.append("keep state")
+        if rule.limit:
+            count, over = per_second(rule.limit)
+            # pf counts per source address rather than for the rule as a whole,
+            # which is the closest thing it has and worth knowing about.
+            parts.append(f"keep state (max-src-conn-rate {count}/{over})")
+        else:
+            parts.append("keep state")
     said = (rule.comment or rule.name).replace('"', "'")
     return " ".join(parts) + f'  # {said}'
 

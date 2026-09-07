@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS rules (
     expires_at  TEXT,
     comment     TEXT,
     enabled     INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    "limit"     TEXT
 );
 CREATE INDEX IF NOT EXISTS rules_origin ON rules (origin);
 CREATE INDEX IF NOT EXISTS rules_service ON rules (service);
@@ -112,6 +113,11 @@ ADDED_COLUMNS = {"ttl": "INTEGER"}
 
 # The same, for the events table: a database written before events were about
 # more than ports has none of these.
+ADDED_RULE_COLUMNS = {
+    # `limit` is a keyword in SQL, so it is quoted everywhere it appears.
+    '"limit"': "TEXT",
+}
+
 ADDED_EVENT_COLUMNS = {
     "scope": "TEXT NOT NULL DEFAULT 'port'",
     "subject": "TEXT NOT NULL DEFAULT ''",
@@ -220,10 +226,16 @@ class Store:
 
     def _add_missing_columns(self) -> None:
         """Bring a database written by an older version up to the current schema."""
-        for table, columns in (("registrations", ADDED_COLUMNS), ("events", ADDED_EVENT_COLUMNS)):
+        for table, columns in (
+            ("registrations", ADDED_COLUMNS),
+            ("events", ADDED_EVENT_COLUMNS),
+            ("rules", ADDED_RULE_COLUMNS),
+        ):
             present = {row["name"] for row in self._db.execute(f"PRAGMA table_info({table})")}
             for column, definition in columns.items():
-                if column not in present:
+                # A column whose name is a keyword is written quoted; PRAGMA
+                # answers with the bare name.
+                if column.strip('"') not in present:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def close(self) -> None:
@@ -565,6 +577,7 @@ def _row_to_rule(row: sqlite3.Row) -> Rule:
         expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
         comment=row["comment"],
         enabled=bool(row["enabled"]),
+        limit=_column(row, "limit", None),
     )
 
 
@@ -611,8 +624,8 @@ class RuleStore:
                         INSERT INTO rules
                             (name, direction, action, protocol, ports, source,
                              destination, interface, origin, service, expires_at,
-                             comment, enabled, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             comment, enabled, created_at, "limit")
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(name) DO UPDATE SET
                             direction = excluded.direction,
                             action = excluded.action,
@@ -625,7 +638,8 @@ class RuleStore:
                             service = excluded.service,
                             expires_at = excluded.expires_at,
                             comment = excluded.comment,
-                            enabled = excluded.enabled
+                            enabled = excluded.enabled,
+                            "limit" = excluded."limit"
                         """,
                         (
                             rule.name,
@@ -642,6 +656,7 @@ class RuleStore:
                             rule.comment,
                             int(rule.enabled),
                             now,
+                            rule.limit,
                         ),
                     )
             except Exception:

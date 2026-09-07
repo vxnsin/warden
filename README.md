@@ -193,7 +193,7 @@ warden also holds the machine's firewall, in whatever the machine actually
 uses — nftables, iptables, pf on macOS and the BSDs, Windows Defender Firewall:
 
 ```sh
-$ warden firewall allow ssh --from 10.0.0.0/8
+$ warden firewall allow ssh --from 10.0.0.0/8 --limit 6/minute
 $ warden firewall apply
 12 rules applied
 rolling back in 60s unless you run `warden firewall confirm`
@@ -203,6 +203,10 @@ rolling back in 60s unless you run `warden firewall confirm`
 first, the rollback is armed second, and the change applied third. The
 watchdog runs detached, so it outlives the ssh session that armed it — a rule
 that locks you out is a minute of waiting rather than a drive to the machine.
+
+A rule can carry a rate — `--limit 6/minute` — which nftables, iptables and pf
+all render, and which Windows refuses by name rather than quietly applying
+without it.
 
 `warden firewall adopt` takes over from ufw or firewalld: it reads their rules,
 shows them, applies them as its own, and turns the other one off only once you

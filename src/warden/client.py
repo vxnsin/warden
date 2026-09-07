@@ -324,6 +324,7 @@ class WardenClient:
         direction: str = "in",
         protocol: str | None = None,
         comment: str | None = None,
+        limit: str | None = None,
         node: str | None = None,
     ) -> dict[str, object]:
         """Write a rule down by hand: a port, a range, or a catalogue name.
@@ -339,6 +340,7 @@ class WardenClient:
             "direction": direction,
             "protocol": protocol,
             "comment": comment,
+            "limit": limit,
         }
         where = f"/v1/fleet/firewall/{node}/rules" if node else "/v1/firewall/rules"
         return dict(self._request("POST", where, json=body))
