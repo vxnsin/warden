@@ -115,6 +115,7 @@ def apply(
         snapshots.disarm()
         raise
     snapshots.went_live([rule.name for rule in policy.rules])
+    snapshots.tally(APPLIED)
     snapshots.said(
         APPLIED,
         backend.kind,
@@ -155,6 +156,7 @@ def roll_back(backend: Backend, snapshots: Snapshots, snapshot: int | None = Non
     # not write and cannot name. Saying nothing beats saying something wrong.
     snapshots.forget_live()
     was_waiting = snapshots.disarm()
+    snapshots.tally(ROLLED_BACK if was_waiting else RESTORED)
     snapshots.said(
         ROLLED_BACK if was_waiting else RESTORED, backend.kind, snapshot=snapshot
     )

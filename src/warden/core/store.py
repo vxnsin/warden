@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS snapshots (
     reason  TEXT
 );
 
+-- Counts that have to survive the history being trimmed. A counter that quietly
+-- starts again is a counter that lies, and `/metrics` reads these.
+CREATE TABLE IF NOT EXISTS tallies (
+    name  TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+);
+
 -- One row or none: what is in the kernel right now, as far as warden knows.
 -- Written after an apply and deleted by a rollback, because what a snapshot
 -- puts back is a ruleset warden did not compose and cannot name.
@@ -719,6 +726,23 @@ class Snapshots:
             return self._store._db.execute(
                 "SELECT * FROM snapshots ORDER BY id DESC LIMIT 1"
             ).fetchone()
+
+    def tally(self, name: str) -> None:
+        """Count one more of something worth counting for the life of the machine."""
+        with self._store._lock:
+            self._store._db.execute(
+                """
+                INSERT INTO tallies (name, count) VALUES (?, 1)
+                ON CONFLICT(name) DO UPDATE SET count = count + 1
+                """,
+                (name,),
+            )
+            self._store._db.commit()
+
+    def tallies(self) -> dict[str, int]:
+        with self._store._lock:
+            rows = self._store._db.execute("SELECT name, count FROM tallies").fetchall()
+        return {row["name"]: row["count"] for row in rows}
 
     def went_live(self, names: list[str]) -> None:
         """Remember which rules were applied, so `pending` can be a real answer.
