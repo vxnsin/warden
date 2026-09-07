@@ -107,5 +107,6 @@ if ! iptables-restore < /tmp/rules.v4 2> /tmp/iptables.err; then
 fi
 iptables-save > /tmp/back.txt
 grep -q "dport 22" /tmp/back.txt
-grep -q "ESTABLISHED,RELATED" /tmp/back.txt
+# iptables writes the states back in its own order, so ask for either.
+grep -qE "ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED)" /tmp/back.txt
 echo "iptables took it and gave it back"
