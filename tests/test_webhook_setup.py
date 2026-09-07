@@ -10,9 +10,10 @@ from warden.models import WebhookStatus
 runner = CliRunner()
 
 BEFORE = "\n\n\n\nn\n"
-# The firewall asks its two before the last question: how long to wait for a
-# confirmation, and whether the registry may open its own ports.
-AFTER = "\nn\nn\n"
+# The firewall asks its three before the last question: how long to wait for a
+# confirmation, whether another machine may change the rules, and whether
+# the registry may open its own ports.
+AFTER = "\nn\nn\nn\n"
 
 
 def answering(*given: str) -> str:

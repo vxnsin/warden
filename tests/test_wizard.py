@@ -574,3 +574,21 @@ def test_the_banner_says_who_wrote_it_and_links_to_where_it_lives():
         assert any("github.com/vxnsin/warden" in str(span.style) for span in tagline.content.spans)
 
     asking(scenario)
+
+
+def test_letting_another_machine_change_the_rules_is_off_until_it_is_asked_for():
+    async def scenario(app: Setup, pilot) -> None:
+        assert app.query_one("#firewall-remote", Switch).value is False
+        app.query_one("#firewall-remote", Switch).value = True
+        await pilot.press("ctrl+s")
+
+    assert asking(scenario)["allow_remote_firewall"] is True
+
+
+def test_saying_no_to_it_writes_that_down_too():
+    async def scenario(app: Setup, pilot) -> None:
+        app.query_one("#firewall-remote", Switch).value = False
+        await pilot.press("ctrl+s")
+
+    answers = asking(scenario, settings(allow_remote_firewall=True))
+    assert answers["allow_remote_firewall"] is False

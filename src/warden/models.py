@@ -279,6 +279,32 @@ class Health(BaseModel):
     nodes: int
 
 
+class FirewallStatus(BaseModel):
+    """What this machine's firewall is, and whether it is about to undo itself."""
+
+    backend: str
+    available: bool
+    enabled: bool
+    remote: bool
+    rules: int
+    live: int
+    from_registry: int
+    rollback_at: datetime | None = None
+
+
+class OpenRequest(BaseModel):
+    """Ask for the port a registered service holds to be let through.
+
+    A service name rather than a port: the registry knows which port that is
+    and how long it holds it for, and a caller naming a number could name any
+    number. What comes back still has to pass every bound in firewall/bounds.py.
+    """
+
+    service: Name
+    source: str = ""
+    comment: Plain | None = None
+
+
 class UpdateStatus(BaseModel):
     """Whether a newer warden exists, or why that is not known."""
 

@@ -4,6 +4,7 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import (
@@ -23,14 +24,18 @@ from warden import __version__
 from warden.core import metrics, updates
 from warden.core.config import Settings
 from warden.core.events import EventBus
-from warden.core.store import Store
+from warden.core.store import RuleStore, Snapshots, Store
 from warden.errors import NotPermittedError, WardenError
+from warden.firewall import guard, link
+from warden.firewall import model as firewall
+from warden.firewall.backends import base
 from warden.fleet import aggregate
 from warden.fleet.nodes import Fleet
 from warden.fleet.upstream import UpstreamReporter
 from warden.models import (
     ErrorResponse,
     Event,
+    FirewallStatus,
     FleetListeners,
     FleetPool,
     FleetRegistration,
@@ -42,6 +47,7 @@ from warden.models import (
     Listener,
     Node,
     NodeAnnouncement,
+    OpenRequest,
     PoolStatus,
     Registration,
     RegistrationRequest,
@@ -82,6 +88,20 @@ def get_events(request: Request) -> EventBus:
 
 Events = Annotated[EventBus, Depends(get_events)]
 
+
+def get_rules(request: Request) -> RuleStore:
+    return request.app.state.rules
+
+
+Rules = Annotated[RuleStore, Depends(get_rules)]
+
+
+def get_snapshots(request: Request) -> Snapshots:
+    return request.app.state.snapshots
+
+
+SnapshotsDep = Annotated[Snapshots, Depends(get_snapshots)]
+
 # Long enough that a comment down an idle stream is rare, short enough that a
 # proxy in the middle does not decide the connection died.
 KEEPALIVE = 20.0
@@ -96,6 +116,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pool = PortPool(settings.pool_start, settings.pool_end, settings.reserved)
         app.state.settings = settings
         app.state.manager = Registry(store, pool, probe=settings.probe)
+        app.state.rules = RuleStore(store)
+        app.state.snapshots = Snapshots(store)
         app.state.fleet = Fleet(
             store, ttl=settings.node_ttl, require_https=settings.require_https
         )
@@ -536,12 +558,128 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with aggregate.client(settings.cluster_token, timeout=300.0) as http:
             return await aggregate.update_fleet(http, fleet.nodes(), here=here)
 
+    def may_change_the_firewall() -> None:
+        """The switch that has to be thrown before a caller may touch the rules.
+
+        Separate from the bounds in firewall/bounds.py, which decide what a
+        rule may be. This decides whether anybody over the network may ask at
+        all - and off is the answer a machine gives until somebody says so.
+        """
+        if not settings.allow_remote_firewall:
+            raise NotPermittedError(
+                "changing the firewall over the API is switched off - "
+                "set allow_remote_firewall on this warden to allow it"
+            )
+
+    firewall_reads = APIRouter(
+        prefix="/v1/firewall", tags=["firewall"], dependencies=[Depends(known_caller)]
+    )
+    firewall_writes = APIRouter(
+        prefix="/v1/firewall",
+        tags=["firewall"],
+        dependencies=[Depends(authorize), Depends(may_change_the_firewall)],
+        responses={status.HTTP_403_FORBIDDEN: {"model": ErrorResponse}},
+    )
+
+    def _backend() -> base.Backend:
+        return base.backend_for(settings.firewall_backend)
+
+    @firewall_reads.get("", summary="What this machine's firewall is")
+    def firewall_status(rules: Rules, snapshots: SnapshotsDep) -> FirewallStatus:
+        backend = _backend()
+        held = rules.list()
+        waiting = guard.armed(snapshots)
+        return FirewallStatus(
+            backend=backend.kind,
+            available=backend.available(),
+            enabled=settings.firewall_from_registry,
+            remote=settings.allow_remote_firewall,
+            rules=len(held),
+            live=len(firewall.Policy(rules=held).live(datetime.now(UTC))),
+            from_registry=sum(1 for rule in held if rule.origin is firewall.Origin.REGISTRY),
+            rollback_at=waiting.deadline if waiting else None,
+        )
+
+    @firewall_reads.get("/rules", summary="Every rule this machine holds")
+    def firewall_rules(rules: Rules, origin: str | None = None) -> list[firewall.Rule]:
+        return rules.list(origin=origin)
+
+    @firewall_writes.post(
+        "/open",
+        summary="Open the port a registered service holds",
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    def firewall_open(asked: OpenRequest, manager: Manager, rules: Rules) -> firewall.Rule:
+        # Through the same door `warden firewall open` uses, so the eight
+        # bounds are not something the API can be talked round.
+        service = link.found(manager.list(), asked.service)
+        rule = link.rule_for(
+            service,
+            source=asked.source or _only_network(),
+            settings=settings,
+            comment=asked.comment,
+        )
+        rules.save(rule)
+        return rule
+
+    def _only_network() -> str:
+        """The network to open to when the caller named none.
+
+        One declared network is not a choice, so warden makes it. More than one
+        is, and a caller who did not make it does not get one picked for them.
+        """
+        allowed = sorted(settings.firewall_allow_from)
+        if len(allowed) == 1:
+            return allowed[0]
+        raise NotPermittedError(
+            "name the network to open to - this machine allows "
+            + (", ".join(allowed) if allowed else "none")
+        )
+
+    @firewall_writes.delete(
+        "/rules/{name}",
+        summary="Take one rule back out",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}},
+    )
+    def firewall_close(name: str, rules: Rules) -> Response:
+        if not rules.delete(name):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no rule called {name!r}")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @firewall_writes.post("/apply", summary="Make the rules true on this machine")
+    def firewall_apply(rules: Rules, snapshots: SnapshotsDep, rollback: int | None = None) -> dict:
+        # A rollback matters more over the API than at a keyboard: the caller
+        # is somewhere else, and a rule that shuts the door shuts it on them.
+        seconds = settings.firewall_rollback if rollback is None else rollback
+        policy = firewall.Policy(rules=rules.list())
+        backend = _backend()
+        waiting = guard.apply(backend, snapshots, policy, rollback=seconds)
+        if waiting is not None:
+            guard.start_watchdog(str(settings.database), waiting.deadline)
+        return {
+            "applied": len(policy.live(datetime.now(UTC))),
+            "rollback_at": waiting.deadline.isoformat() if waiting else None,
+        }
+
+    @firewall_writes.post("/confirm", summary="Keep what was applied")
+    def firewall_confirm(snapshots: SnapshotsDep) -> dict:
+        kept = guard.confirm(snapshots)
+        return {"confirmed": kept.snapshot}
+
+    @firewall_writes.post("/restore", summary="Put the last snapshot back")
+    def firewall_restore(snapshots: SnapshotsDep, snapshot: int | None = None) -> dict:
+        return {"restored": guard.roll_back(_backend(), snapshots, snapshot)}
+
+
     app.include_router(reads)
     app.include_router(between)
     app.include_router(v1)
     app.include_router(nodes)
     app.include_router(fleet_view)
     app.include_router(fleet_writes)
+    app.include_router(firewall_reads)
+    app.include_router(firewall_writes)
 
     @app.get(
         "/metrics",

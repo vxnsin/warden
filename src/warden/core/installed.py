@@ -13,7 +13,7 @@ import json
 import sys
 from dataclasses import dataclass
 from importlib.metadata import Distribution, PackageNotFoundError
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import warden
 
@@ -112,8 +112,12 @@ def _wrong_name(how: str, prefix: Path, name: str) -> Install:
     )
 
 
-def _named_under(prefix: Path, *trail: str) -> str | None:
-    """The directory named just after ``trail``, if ``trail`` is in the path."""
+def _named_under(prefix: PurePath, *trail: str) -> str | None:
+    """The directory named just after ``trail``, if ``trail`` is in the path.
+
+    Takes any flavour of path, so a Windows one can be read on a machine that
+    is not Windows - which is the only way this is testable anywhere.
+    """
     parts = [part.lower() for part in prefix.parts]
     wanted = list(trail)
     for index in range(len(parts) - len(trail)):
