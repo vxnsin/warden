@@ -253,3 +253,9 @@ def test_the_plain_shape_carries_no_icon_either():
         node_event(), node="hub", shape=webhooks.JSON, icons={"node.stale": "SEEN"}
     )
     assert b"SEEN" not in body
+
+
+def test_discord_names_the_event_once_rather_than_beside_the_subject(event: Event):
+    embed = body_of(event, shape=webhooks.DISCORD)["embeds"][0]
+    assert embed["author"]["name"] == "port.registered"
+    assert "shop-api" not in embed["author"]["name"]

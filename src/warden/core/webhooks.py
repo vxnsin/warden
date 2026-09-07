@@ -140,11 +140,6 @@ def about(event: Event) -> str:
     return event.subject or event.name or event.scope
 
 
-def _title(event: Event) -> str:
-    """What the message calls itself: the event, and what it happened to."""
-    return f"{event.full} - {event.subject}" if event.subject else event.full
-
-
 def facts(event: Event, node: str, *, with_node: bool = True) -> list[tuple[str, str]]:
     """The fields worth showing, which depend on what kind of thing this is.
 
@@ -221,7 +216,9 @@ def _discord(event: Event, node: str, look: Look) -> dict[str, object]:
     return {
         "embeds": [
             {
-                "author": {"name": _title(event)},
+                # The event name only. The subject is the title right under it,
+                # and saying it twice is how a message starts looking generated.
+                "author": {"name": event.full},
                 "title": _headline(look, event),
                 "description": detail(event, node, look),
                 "color": look.colour,
