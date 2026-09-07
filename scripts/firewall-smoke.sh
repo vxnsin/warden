@@ -48,5 +48,41 @@ echo "still there, as asked"
 say "a refused apply leaves nothing armed"
 warden firewall status --json | grep -q '"rollback_at": null'
 
-echo
-echo "all of it, on a real ruleset"
+
+say "taking over from a real ufw"
+export DEBIAN_FRONTEND=noninteractive
+apt-get -qq install -y --no-install-recommends ufw > /dev/null 2>&1 || {
+  echo "no ufw available here, skipping the adoption round"; exit 0;
+}
+ufw --force reset > /dev/null 2>&1 || true
+ufw allow 22/tcp > /dev/null
+ufw allow from 10.0.0.0/8 to any port 8000:8100 proto tcp > /dev/null
+ufw deny 3389 > /dev/null
+ufw --force enable > /dev/null 2>&1 || {
+  echo "ufw would not start in this container, reading it anyway"; }
+
+echo "what ufw says it holds:"
+ufw status numbered || true
+
+rm -f "$WARDEN_DATABASE"
+warden firewall adopt --manager ufw --yes --rollback 0
+warden firewall list
+
+say "every ufw rule came across"
+warden firewall list --json > /tmp/adopted.json
+python - <<'PY'
+import json, sys
+rules = json.load(open("/tmp/adopted.json"))
+ports = {tuple(sorted(r["ports"])) for r in rules}
+missing = [w for w in ((22,), (3389,)) if w not in ports]
+ranged = [r for r in rules if len(r["ports"]) == 101 and r["source"] == "10.0.0.0/8"]
+if missing or not ranged:
+    print("lost something in the crossing:", missing, "range kept:", bool(ranged), file=sys.stderr)
+    print(json.dumps(rules, indent=2), file=sys.stderr)
+    sys.exit(1)
+print("22, 3389 and 8000:8100 from 10.0.0.0/8 all arrived")
+PY
+
+say "and it is loaded, while ufw is still enabled"
+nft list ruleset | grep -q 'tcp dport 22'
+echo "warden holds the ruleset; ufw goes only on confirm"

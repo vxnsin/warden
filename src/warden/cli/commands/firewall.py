@@ -24,7 +24,7 @@ from warden.cli.shared import (
 from warden.core import store
 from warden.core.config import Settings
 from warden.errors import WardenError
-from warden.firewall import catalogue, guard, link
+from warden.firewall import adopt, catalogue, guard, link
 from warden.firewall import model as firewall
 from warden.firewall.backends import base
 
@@ -405,14 +405,96 @@ def firewall_apply(
         _waiting_line(waiting)
 
 
+@firewall_app.command("adopt")
+def firewall_adopt(
+    manager: Annotated[
+        str | None, typer.Option(help="Which firewall to read. Found if not given.")
+    ] = None,
+    rollback: Annotated[
+        int | None, typer.Option(help="Seconds to wait for a confirmation. 0 turns it off.")
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask first.")] = False,
+    as_json: JsonOption = False,
+) -> None:
+    """Take over from the firewall that is managing this machine now.
+
+    Reads its rules first, shows them, applies them as warden's own, and only
+    turns the other one off once you have confirmed. Until then it is still
+    enabled, so rolling back returns the machine exactly as it was.
+    """
+    settings = Settings()
+    found = [manager] if manager else adopt.managing()
+    if not found:
+        console.print("nothing else is managing this machine", style=theme.BONE_DIM)
+        return
+
+    taking = found[0]
+    reading = adopt.read(taking)
+    if as_json:
+        _dump(
+            {
+                "manager": taking,
+                "rules": [rule.model_dump(mode="json") for rule in reading.rules],
+                "untranslated": reading.untranslated,
+            }
+        )
+        return
+
+    console.print(f"{taking} is holding {theme.plural(len(reading.rules), 'rule')}")
+    console.print(_rules_table(reading.rules))
+    for line in reading.untranslated:
+        errors.print(f"could not read: {line}", style=theme.SHRIEKER)
+    if reading.untranslated:
+        errors.print(
+            "those would be lost. Write them by hand first, or say no.",
+            style=theme.SHRIEKER,
+        )
+
+    if not yes and not typer.confirm(f"Take over from {taking}?"):
+        console.print("left alone", style=theme.BONE_DIM)
+        return
+
+    rules = _rules()
+    rules.save_many(reading.rules)
+    seconds = settings.firewall_rollback if rollback is None else rollback
+    policy = firewall.Policy(rules=rules.list())
+    try:
+        backend = _backend()
+        waiting = guard.apply(
+            backend, _snapshots(), policy, rollback=seconds, reason=f"{guard.ADOPTING}:{taking}"
+        )
+    except WardenError as exc:
+        rules.delete_many([rule.name for rule in reading.rules])
+        raise _fail(exc) from exc
+
+    if waiting is not None:
+        guard.start_watchdog(str(settings.database), waiting.deadline)
+    console.print(f"{len(policy.rules)} rules applied", style=theme.MOSS)
+    console.print(
+        f"{taking} is still enabled and its rules are not loaded - confirming turns "
+        f"it off, restoring puts it back",
+        style=theme.BONE_DIM,
+    )
+    if waiting is not None:
+        _waiting_line(waiting)
+
+
 @firewall_app.command("confirm")
 def firewall_confirm() -> None:
     """Keep what was applied, and call off the rollback."""
     try:
-        guard.confirm(_snapshots())
+        kept = guard.confirm(_snapshots())
     except WardenError as exc:
         raise _fail(exc) from exc
     console.print("kept", style=theme.MOSS)
+
+    # Only now: until this moment a rollback could have put the machine back
+    # exactly as it was, other firewall and all.
+    taken = (kept.reason or "").partition(f"{guard.ADOPTING}:")[2]
+    if taken:
+        for step in adopt.stand_down(taken):
+            console.print(f"  {step}", style=theme.BONE_DIM)
+        console.print(f"{taken} is off", style=theme.MOSS)
 
 
 @firewall_app.command("restore")
