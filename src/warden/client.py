@@ -315,6 +315,34 @@ class WardenClient:
         body = {"service": service, "source": source, "comment": comment}
         return Rule.model_validate(self._request("POST", "/v1/firewall/open", json=body))
 
+    def firewall_write(
+        self,
+        what: str,
+        *,
+        action: str = "allow",
+        source: str = "any",
+        direction: str = "in",
+        protocol: str | None = None,
+        comment: str | None = None,
+        node: str | None = None,
+    ) -> dict[str, object]:
+        """Write a rule down by hand: a port, a range, or a catalogue name.
+
+        Not bounded by the pool - those bounds are about what the registry may
+        ask for. This is a token holder saying so, and `allow_remote_firewall`
+        on the machine being asked is what allows it at all.
+        """
+        body = {
+            "what": what,
+            "action": action,
+            "source": source,
+            "direction": direction,
+            "protocol": protocol,
+            "comment": comment,
+        }
+        where = f"/v1/fleet/firewall/{node}/rules" if node else "/v1/firewall/rules"
+        return dict(self._request("POST", where, json=body))
+
     def firewall_close(self, name: str) -> None:
         """Take one rule back out."""
         self._request("DELETE", f"/v1/firewall/rules/{name}")

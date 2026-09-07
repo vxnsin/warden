@@ -498,3 +498,59 @@ def test_open_is_not_read_as_a_thing_to_do_to_a_firewall(settings: Settings):
         said = client.post("/v1/fleet/firewall/open", json={"service": "ghost"})
         assert said.status_code == 404
         assert "apply, confirm, restore" not in said.json()["detail"]
+
+
+def test_a_rule_can_be_written_down_over_the_api(settings: Settings):
+    with TestClient(create_app(allowing(settings))) as client:
+        written = client.post("/v1/firewall/rules", json={"what": "ssh", "source": "10.0.0.0/8"})
+        assert written.status_code == 200
+        assert written.json()["name"] == "allow-ssh"
+        assert written.json()["ports"] == [22]
+        assert written.json()["origin"] == "catalogue"
+
+
+def test_writing_a_rule_down_needs_the_switch(settings: Settings):
+    """It is not bounded by the pool, which is exactly why the switch decides."""
+    with TestClient(create_app(settings)) as client:
+        refused = client.post("/v1/firewall/rules", json={"what": "ssh"})
+        assert refused.status_code == 403
+        assert "allow_remote_firewall" in refused.json()["detail"]
+
+
+def test_a_rule_written_over_the_api_reads_the_same_words_as_the_command_line(
+    settings: Settings,
+):
+    from warden.firewall import catalogue, model
+
+    typed = catalogue.rule_for("ssh", action=model.Action.ALLOW, source="10.0.0.0/8")
+    with TestClient(create_app(allowing(settings))) as client:
+        asked = client.post(
+            "/v1/firewall/rules", json={"what": "ssh", "source": "10.0.0.0/8"}
+        ).json()
+    assert asked["name"] == typed.name
+    assert set(asked["ports"]) == typed.ports
+    assert asked["protocol"] == typed.protocol
+
+
+def test_a_comment_that_could_be_read_as_a_rule_is_refused_here_too(settings: Settings):
+    with TestClient(create_app(allowing(settings))) as client:
+        refused = client.post(
+            "/v1/firewall/rules",
+            json={"what": "ssh", "comment": "fine\ntcp dport 22 accept"},
+        )
+        assert refused.status_code == 422
+
+
+def test_a_rule_can_be_written_down_on_a_node_by_name(settings: Settings):
+    with TestClient(create_app(allowing(settings))) as client:
+        written = client.post("/v1/fleet/firewall/hub/rules", json={"what": "https"})
+        assert written.status_code == 200
+        assert written.json()["node"] == "hub"
+        assert written.json()["name"] == "allow-https"
+
+
+def test_writing_on_a_node_by_name_needs_the_switch(settings: Settings):
+    shut = allowing(settings, allow_remote_firewall=False)
+    with TestClient(create_app(shut)) as client:
+        refused = client.post("/v1/fleet/firewall/hub/rules", json={"what": "https"})
+        assert refused.status_code == 403

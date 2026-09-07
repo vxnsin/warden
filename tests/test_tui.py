@@ -2,7 +2,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from textual.widgets import DataTable, Static, Tabs
+from textual.widgets import DataTable, Input, Static, Tabs
 
 from warden import theme
 from warden.errors import WardenError
@@ -15,6 +15,7 @@ from warden.models import (
     FleetRules,
     FleetServices,
     Listener,
+    Node,
     NodePool,
     PoolStatus,
     Registration,
@@ -23,6 +24,7 @@ from warden.models import (
 from warden.tui import (
     BANNER_MIN_HEIGHT,
     COLUMNS,
+    NODES,
     PORTS,
     RULES,
     SERVICES,
@@ -77,6 +79,9 @@ class StubClient:
         return []
 
     def firewall_rules(self, **_kwargs) -> list[Rule]:
+        return []
+
+    def nodes(self) -> list[Node]:
         return []
 
 
@@ -256,6 +261,9 @@ def test_tab_steps_through_the_views_and_comes_back_round():
         assert app.view == RULES
         assert showing(app) == "Firewall"
         await pilot.press("tab")
+        assert app.view == NODES
+        assert showing(app) == "Nodes"
+        await pilot.press("tab")
         assert app.view == SERVICES
         assert showing(app) == "Services"
 
@@ -265,7 +273,7 @@ def test_tab_steps_through_the_views_and_comes_back_round():
 def test_the_bar_can_be_stepped_backwards_as_well():
     async def scenario(app: WardenApp, pilot) -> None:
         await pilot.press("ctrl+left")
-        assert app.view == RULES
+        assert app.view == NODES
         await pilot.press("ctrl+right")
         assert app.view == SERVICES
 
@@ -597,3 +605,167 @@ def test_the_rules_view_can_be_filtered_to_one_node():
         assert app.query_one(DataTable).row_count == 1
 
     run_app(scenario, client=Two(), fleet=True)
+
+
+def a_node(name: str, status_in: int = 90) -> Node:
+    now = datetime.now(UTC)
+    return Node(
+        name=name,
+        url=f"http://{name}:7010",
+        pool_start=9000,
+        pool_end=9099,
+        version="0.5.0",
+        first_seen=now,
+        last_seen=now,
+        expires_at=now + timedelta(seconds=status_in),
+    )
+
+
+class Writing(FleetStubClient):
+    """A hub that remembers what it was asked to write."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.registered: list[tuple[str, dict]] = []
+        self.written: list[tuple[str, dict]] = []
+        self.closed: list[tuple[str, str | None]] = []
+        self.forgotten: list[str] = []
+
+    def nodes(self) -> list[Node]:
+        return [a_node("build-01"), a_node("db-03", status_in=-30)]
+
+    def fleet_firewall_rules(self, **_kwargs) -> FleetRules:
+        return FleetRules(rules=[{**A_RULE, "node": "build-01"}], unreachable=[])
+
+    def register(self, name: str, **kwargs):
+        self.registered.append((name, kwargs))
+        return registration(name, 8000)
+
+    def firewall_write(self, what: str, **kwargs):
+        self.written.append((what, kwargs))
+        return {"name": f"allow-{what}"}
+
+    def firewall_close(self, name: str) -> None:
+        self.closed.append((name, None))
+
+    def firewall_close_on(self, node: str, name: str) -> None:
+        self.closed.append((name, node))
+
+    def forget(self, name: str) -> None:
+        self.forgotten.append(name)
+
+
+async def to_view(app: WardenApp, pilot, view: str) -> None:
+    while app.view != view:
+        await pilot.press("tab")
+        await pilot.pause()
+    await pilot.pause()
+
+
+def test_the_nodes_view_lists_every_warden_that_reported_in():
+    async def scenario(app: WardenApp, pilot) -> None:
+        await to_view(app, pilot, NODES)
+        table = app.query_one(DataTable)
+        assert table.row_count == 2
+        assert [str(c.label) for c in table.columns.values()] == list(COLUMNS[NODES])
+        assert "1 gone quiet" in str(app.query_one("#stats", Static).content)
+
+    run_app(scenario, client=Writing(), fleet=True)
+
+
+def test_a_node_can_be_forgotten_from_the_dashboard():
+    client = Writing()
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await to_view(app, pilot, NODES)
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert client.forgotten == ["build-01"]
+
+    run_app(scenario, client=client, fleet=True)
+
+
+def test_a_rule_can_be_closed_from_the_dashboard():
+    client = Writing()
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await to_view(app, pilot, RULES)
+        await pilot.press("d")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert client.closed == [("allow-shop-api", "build-01")]
+
+    run_app(scenario, client=client, fleet=True)
+
+
+def test_a_service_can_be_registered_from_the_dashboard():
+    client = Writing()
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("a")
+        await pilot.pause()
+        app.screen.query_one("#ask-name", Input).value = "shop-api"
+        app.screen.query_one("#ask-kind", Input).value = "backend"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert client.registered
+        name, said = client.registered[0]
+        assert name == "shop-api"
+        assert said["kind"] == "backend"
+
+    run_app(scenario, client=client)
+
+
+def test_a_rule_can_be_written_from_the_dashboard():
+    client = Writing()
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await to_view(app, pilot, RULES)
+        await pilot.press("a")
+        await pilot.pause()
+        app.screen.query_one("#ask-what", Input).value = "ssh"
+        app.screen.query_one("#ask-source", Input).value = "10.0.0.0/8"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert client.written
+        what, said = client.written[0]
+        assert what == "ssh"
+        assert said["source"] == "10.0.0.0/8"
+
+    run_app(scenario, client=client)
+
+
+def test_nothing_is_added_where_there_is_nothing_to_add():
+    """A socket is opened by a process, and a warden announces itself."""
+    client = Writing()
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await to_view(app, pilot, PORTS)
+        await pilot.press("a")
+        await pilot.pause()
+        assert "nothing to add here" in str(app.query_one("#stats", Static).content)
+        assert not client.registered and not client.written
+
+    run_app(scenario, client=client)
+
+
+def test_a_port_that_is_not_a_number_is_said_rather_than_sent():
+    client = Writing()
+
+    async def scenario(app: WardenApp, pilot) -> None:
+        await pilot.press("a")
+        await pilot.pause()
+        app.screen.query_one("#ask-name", Input).value = "shop-api"
+        app.screen.query_one("#ask-port", Input).value = "eight thousand"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not client.registered
+        assert "not a port number" in str(app.query_one("#stats", Static).content)
+
+    run_app(scenario, client=client)

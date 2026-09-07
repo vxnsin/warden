@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -302,6 +302,24 @@ class OpenRequest(BaseModel):
 
     service: Name
     source: str = ""
+    comment: Plain | None = None
+
+
+class RuleRequest(BaseModel):
+    """Write a rule down by hand, the way `warden firewall allow` does.
+
+    Not bounded by the pool or by `firewall_allow_from`: those bound what the
+    *registry* may ask for, and this is somebody with the token saying so. What
+    gates it is `allow_remote_firewall`, which is off until a machine says
+    otherwise - and `warden doctor` fails a machine that says otherwise while
+    listening beyond loopback with no token at all.
+    """
+
+    what: Name
+    action: Literal["allow", "deny", "reject"] = "allow"
+    source: str = "any"
+    direction: Literal["in", "out"] = "in"
+    protocol: Literal["tcp", "udp", "icmp", "any"] | None = None
     comment: Plain | None = None
 
 

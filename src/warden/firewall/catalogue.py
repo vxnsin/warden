@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 
 from warden.errors import WardenError
-from warden.firewall.model import Protocol
+from warden.firewall.model import ANYWHERE, Action, Direction, Origin, Protocol, Rule
 
 SERVICES: dict[str, tuple[Protocol, set[int]]] = {
     "ssh": (Protocol.TCP, {22}),
@@ -69,3 +69,41 @@ def describe(protocol: str, ports: object) -> str:
 def named_for(protocol: str, ports: set[int]) -> str | None:
     """The catalogue name for a protocol given by its own name."""
     return named(Protocol(protocol), ports)
+
+
+def rule_for(
+    what: str,
+    *,
+    action: Action,
+    source: str = ANYWHERE,
+    direction: Direction = Direction.IN,
+    protocol: str | None = None,
+    comment: str | None = None,
+) -> Rule:
+    """A port, a port range, or a name out of the catalogue.
+
+    One place, because the command line and the API have to write down the same
+    rule for the same words - a rule that means one thing typed and another
+    thing asked for is worse than either.
+    """
+    if what.isdigit():
+        ports = {int(what)}
+        kind = Protocol(protocol or "tcp")
+        origin = Origin.MANUAL
+        name = f"{action}-{what}"
+    else:
+        kind, ports = look_up(what)
+        if protocol:
+            kind = Protocol(protocol)
+        origin = Origin.CATALOGUE
+        name = f"{action}-{what.lower()}"
+    return Rule(
+        name=name,
+        direction=direction,
+        action=action,
+        protocol=kind,
+        ports=ports,
+        source=source,
+        origin=origin,
+        comment=comment,
+    )
