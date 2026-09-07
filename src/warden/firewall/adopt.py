@@ -64,7 +64,18 @@ UFW_ROW = re.compile(
     r"(?P<from>.+?)\s*$"
 )
 
-VERDICTS = {"ALLOW": Action.ALLOW, "DENY": Action.DENY, "REJECT": Action.REJECT}
+VERDICTS = {
+    "ALLOW": Action.ALLOW,
+    "DENY": Action.DENY,
+    "REJECT": Action.REJECT,
+    # ufw's LIMIT is an allow with a brake on it: six attempts in thirty
+    # seconds and the seventh is dropped. warden holds rates rather than hit
+    # counts, so it is carried over as the same rate and said out loud.
+    "LIMIT": Action.ALLOW,
+}
+
+# Six in thirty seconds, written as the rate warden and every backend can say.
+UFW_LIMIT = "12/minute"
 
 
 def _address(said: str) -> str | None:
@@ -132,6 +143,7 @@ def from_ufw(status: str) -> Reading:
             reading.untranslated.append(line)
             continue
 
+        limited = row["action"] == "LIMIT"
         for protocol, ports in targets:
             rule = Rule(
                 name=_named(reading.rules, action, protocol, ports, source),
@@ -141,6 +153,7 @@ def from_ufw(status: str) -> Reading:
                 ports=ports,
                 source=source,
                 origin=Origin.ADOPTED,
+                limit=UFW_LIMIT if limited else None,
                 comment=_as_comment(f"from ufw: {line}"),
             )
             # ufw lists v4 and v6 separately. warden's table is `inet`, which
