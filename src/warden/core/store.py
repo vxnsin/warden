@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     pool_start INTEGER NOT NULL,
     pool_end   INTEGER NOT NULL,
     version    TEXT NOT NULL,
+    tags       TEXT NOT NULL DEFAULT '',
     first_seen TEXT NOT NULL,
     last_seen  TEXT NOT NULL,
     expires_at TEXT NOT NULL
@@ -118,6 +119,10 @@ CREATE TABLE IF NOT EXISTS nodes (
 
 # Columns added after the first release, applied to databases that predate them.
 ADDED_COLUMNS = {"ttl": "INTEGER"}
+
+# What a node says it is. A database written before tags existed has none, and
+# a node without them is in no group rather than in every group.
+ADDED_NODE_COLUMNS = {"tags": "TEXT NOT NULL DEFAULT ''"}
 
 # The same, for the events table: a database written before events were about
 # more than ports has none of these.
@@ -207,6 +212,7 @@ def _row_to_node(row: sqlite3.Row) -> Node:
         pool_start=row["pool_start"],
         pool_end=row["pool_end"],
         version=row["version"],
+        tags=[tag for tag in (row["tags"] or "").split(",") if tag],
         first_seen=datetime.fromisoformat(row["first_seen"]),
         last_seen=datetime.fromisoformat(row["last_seen"]),
         expires_at=datetime.fromisoformat(row["expires_at"]),
@@ -239,6 +245,7 @@ class Store:
             ("registrations", ADDED_COLUMNS),
             ("events", ADDED_EVENT_COLUMNS),
             ("rules", ADDED_RULE_COLUMNS),
+            ("nodes", ADDED_NODE_COLUMNS),
         ):
             present = {row["name"] for row in self._db.execute(f"PRAGMA table_info({table})")}
             for column, definition in columns.items():
@@ -521,14 +528,15 @@ class Store:
             self._db.execute(
                 """
                 INSERT INTO nodes
-                    (name, url, pool_start, pool_end, version,
+                    (name, url, pool_start, pool_end, version, tags,
                      first_seen, last_seen, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET
                     url = excluded.url,
                     pool_start = excluded.pool_start,
                     pool_end = excluded.pool_end,
                     version = excluded.version,
+                    tags = excluded.tags,
                     last_seen = excluded.last_seen,
                     expires_at = excluded.expires_at
                 """,
@@ -538,6 +546,7 @@ class Store:
                     node.pool_start,
                     node.pool_end,
                     node.version,
+                    ",".join(node.tags),
                     _isoformat(node.first_seen),
                     _isoformat(node.last_seen),
                     _isoformat(node.expires_at),

@@ -326,6 +326,11 @@ class Settings(BaseSettings):
     upstream: str | None = None
     cluster_token: str | None = None
     node_ttl: int = Field(default=90, ge=10, le=86_400)
+    # `web`, `eu-west`, `db` - what this machine is, travelling in the
+    # announcement it already sends. On the node rather than in a list on the
+    # hub: two places that know what a machine is disagree the first time one
+    # is rebuilt, and the machine is the one that knows.
+    tags: WordSet = Field(default_factory=set)
     require_https: bool = False
 
     @classmethod

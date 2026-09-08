@@ -34,6 +34,7 @@ class UpstreamReporter:
             "pool_start": self.settings.pool_start,
             "pool_end": self.settings.pool_end,
             "version": __version__,
+            "tags": sorted(self.settings.tags),
         }
 
     def client(self) -> httpx.AsyncClient:

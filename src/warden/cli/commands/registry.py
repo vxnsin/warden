@@ -219,12 +219,17 @@ def list_services(
     every: Annotated[
         bool, typer.Option("--all", help="Ask every warden in the fleet, not just this one.")
     ] = False,
+    tagged: Annotated[
+        str | None, typer.Option("--tag", help="Only the nodes carrying this tag. With --all.")
+    ] = None,
     url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
 ) -> None:
     """List every registered service."""
     holders = holders or stale
+    if tagged and not every:
+        raise _fail(WardenError("a tag picks out nodes, so --tag goes with --all"))
     if holders and every:
         raise _fail(
             WardenError("a holder can only be checked on the machine it runs on, so --holders "
@@ -233,7 +238,7 @@ def list_services(
     with shared._client(url, token) as client:
         try:
             fleet = (
-                client.fleet_services(project=project, kind=kind)
+                client.fleet_services(project=project, kind=kind, tag=tagged)
                 if every
                 else None
             )

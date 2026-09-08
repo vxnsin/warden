@@ -397,7 +397,7 @@ async def _update_one(http: httpx.AsyncClient, node: Node) -> UpdateResult:
 
 
 async def update_fleet(
-    http: httpx.AsyncClient, nodes: list[Node], *, here: UpdateResult
+    http: httpx.AsyncClient, nodes: list[Node], *, here: UpdateResult | None
 ) -> FleetUpdate:
     """Ask every node to update itself.
 
@@ -405,7 +405,9 @@ async def update_fleet(
     request. A node with nothing configured refuses, and says so.
     """
     results = list(await asyncio.gather(*(_update_one(http, node) for node in nodes)))
-    results.append(here)
+    if here is not None:
+        # None where a tag picked out machines and this one is not among them.
+        results.append(here)
     results.sort(key=lambda result: result.node)
     return FleetUpdate(results=results)
 
@@ -629,7 +631,7 @@ async def firewall_fleet(
     what: str,
     *,
     params: dict[str, object] | None = None,
-    here: FirewallResult,
+    here: FirewallResult | None,
 ) -> FleetFirewallResult:
     """Ask every node to do the same thing to its own firewall.
 
@@ -643,7 +645,8 @@ async def firewall_fleet(
             *(_firewall_one(http, node, what, params or {}) for node in nodes)
         )
     )
-    results.append(here)
+    if here is not None:
+        results.append(here)
     results.sort(key=lambda result: result.node)
     return FleetFirewallResult(results=results)
 

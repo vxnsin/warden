@@ -602,15 +602,18 @@ def _across_the_fleet(
     what: str,
     *,
     rollback: int | None = None,
+    tag: str | None = None,
     as_json: bool,
 ) -> None:
     """One line per node, whichever way each of them went."""
     if what == "apply":
-        found = _asking(url, token, lambda client: client.firewall_apply_fleet(rollback=rollback))
+        found = _asking(
+            url, token, lambda client: client.firewall_apply_fleet(rollback=rollback, tag=tag)
+        )
     elif what == "confirm":
-        found = _asking(url, token, lambda client: client.firewall_confirm_fleet())
+        found = _asking(url, token, lambda client: client.firewall_confirm_fleet(tag=tag))
     else:
-        found = _asking(url, token, lambda client: client.firewall_restore_fleet())
+        found = _asking(url, token, lambda client: client.firewall_restore_fleet(tag=tag))
 
     if as_json:
         _dump(found.model_dump(mode="json"))
@@ -653,6 +656,9 @@ def firewall_apply(
     fleet: Annotated[
         bool, typer.Option("--fleet", help="Every warden in the fleet, each on its own.")
     ] = False,
+    tagged: Annotated[
+        str | None, typer.Option("--tag", help="Only the nodes carrying this tag.")
+    ] = None,
     at: Annotated[
         str | None, typer.Option("--node", help="One node in the fleet, through the hub.")
     ] = None,
@@ -670,7 +676,7 @@ def firewall_apply(
     at once. `--node build-01` asks exactly one.
     """
     if fleet:
-        _across_the_fleet(url, token, "apply", rollback=rollback, as_json=as_json)
+        _across_the_fleet(url, token, "apply", rollback=rollback, tag=tagged, as_json=as_json)
         return
     if at:
         said = _asking(url, token, lambda client: client.firewall_apply_on(at, rollback=rollback))
@@ -863,6 +869,9 @@ def firewall_confirm(
     fleet: Annotated[
         bool, typer.Option("--fleet", help="Every warden in the fleet, each on its own.")
     ] = False,
+    tagged: Annotated[
+        str | None, typer.Option("--tag", help="Only the nodes carrying this tag.")
+    ] = None,
     at: Annotated[
         str | None, typer.Option("--node", help="One node in the fleet, through the hub.")
     ] = None,
@@ -876,7 +885,7 @@ def firewall_confirm(
     back when its own window runs out.
     """
     if fleet:
-        _across_the_fleet(url, token, "confirm", as_json=as_json)
+        _across_the_fleet(url, token, "confirm", tag=tagged, as_json=as_json)
         return
     if at:
         said = _asking(url, token, lambda client: client.firewall_confirm_on(at))

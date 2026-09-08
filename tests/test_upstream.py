@@ -29,6 +29,7 @@ def test_the_announcement_says_who_and_what(edge: Settings):
         "pool_start": 9000,
         "pool_end": 9099,
         "version": __version__,
+        "tags": [],
     }
 
 

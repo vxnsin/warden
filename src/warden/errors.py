@@ -40,6 +40,16 @@ class UnknownNodeError(WardenError):
     status_code = 404
 
 
+class UnknownTagError(WardenError):
+    """A tag no node in the fleet carries.
+
+    A refusal rather than an empty answer: an apply that quietly touched no
+    machines is worse than one that would not run.
+    """
+
+    status_code = 404
+
+
 class UpdateFailedError(WardenError):
     status_code = 500
 

@@ -29,6 +29,13 @@ Project = Annotated[
 ]
 Port = Annotated[int, Field(ge=1, le=65535)]
 
+# What a machine says it is: `web`, `eu-west`, `db`. Same shape as a kind, so a
+# tag can be typed on a command line without quoting and read in a table.
+Tag = Annotated[
+    str,
+    StringConstraints(pattern=r"^[a-z0-9][a-z0-9._-]{0,31}$", strip_whitespace=True),
+]
+
 # Text that ends up in something which parses what it is given: a Caddyfile, an
 # nginx server block, an nftables comment, a chat message. A quote or a
 # backslash ends a quoted string somewhere, and a control character ends a
@@ -171,6 +178,10 @@ class NodeAnnouncement(BaseModel):
     pool_start: Port
     pool_end: Port
     version: str
+    # What this machine says it is. Kept on the node rather than in a list on
+    # the hub: two places that know what a machine is disagree the first time
+    # one is rebuilt, and the machine is the one that knows.
+    tags: list[Tag] = Field(default_factory=list)
 
     @field_validator("url")
     @classmethod
@@ -187,6 +198,7 @@ class Node(BaseModel):
     pool_start: int
     pool_end: int
     version: str
+    tags: list[Tag] = Field(default_factory=list)
     first_seen: datetime
     last_seen: datetime
     expires_at: datetime
