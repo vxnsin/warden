@@ -49,6 +49,12 @@ _STATUS_ERRORS: dict[int, type[WardenError]] = {
 }
 
 
+def _some(**params: object) -> dict[str, object] | None:
+    """The parameters that were actually given, or nothing at all."""
+    said = {key: value for key, value in params.items() if value is not None}
+    return said or None
+
+
 def resolve_url(url: str | None = None) -> str:
     return (url or os.environ.get("WARDEN_URL") or DEFAULT_URL).rstrip("/")
 
@@ -277,10 +283,14 @@ class WardenClient:
         self._request("DELETE", f"/v1/nodes/{name}")
 
     def fleet_services(
-        self, *, project: str | None = None, kind: str | None = None
+        self, *, project: str | None = None, kind: str | None = None, tag: str | None = None
     ) -> FleetServices:
         """Everything the whole fleet holds, and the nodes that did not answer."""
-        params = {key: value for key, value in (("project", project), ("kind", kind)) if value}
+        params = {
+            key: value
+            for key, value in (("project", project), ("kind", kind), ("tag", tag))
+            if value
+        }
         return FleetServices.model_validate(
             self._request("GET", "/v1/fleet/services", params=params)
         )
@@ -470,29 +480,39 @@ class WardenClient:
             self._request("POST", "/v1/fleet/firewall/open", json=body, timeout=60.0)
         )
 
-    def firewall_apply_fleet(self, *, rollback: int | None = None) -> FleetFirewallResult:
+    def firewall_apply_fleet(
+        self, *, rollback: int | None = None, tag: str | None = None
+    ) -> FleetFirewallResult:
         """Make every node's rules true, each with its own rollback armed.
 
         A fleet-wide apply keeps its window: pass `rollback=0` and it is
         refused. Nothing is kept until `firewall_confirm_fleet`, and a node
         that is never confirmed puts itself back on its own.
         """
-        params = {"rollback": rollback} if rollback is not None else None
+        params = _some(rollback=rollback, tag=tag)
         return FleetFirewallResult.model_validate(
             self._request("POST", "/v1/fleet/firewall/apply", params=params, timeout=60.0)
         )
 
-    def firewall_confirm_fleet(self) -> FleetFirewallResult:
+    def firewall_confirm_fleet(self, *, tag: str | None = None) -> FleetFirewallResult:
         """Keep what every node applied."""
         return FleetFirewallResult.model_validate(
-            self._request("POST", "/v1/fleet/firewall/confirm", timeout=60.0)
+            self._request(
+                "POST", "/v1/fleet/firewall/confirm", params=_some(tag=tag), timeout=60.0
+            )
         )
 
-    def firewall_restore_fleet(self, snapshot: int | None = None) -> FleetFirewallResult:
+    def firewall_restore_fleet(
+        self, snapshot: int | None = None, *, tag: str | None = None
+    ) -> FleetFirewallResult:
         """Put every node back to a snapshot, whether or not one was waiting."""
-        params = {"snapshot": snapshot} if snapshot is not None else None
         return FleetFirewallResult.model_validate(
-            self._request("POST", "/v1/fleet/firewall/restore", params=params, timeout=60.0)
+            self._request(
+                "POST",
+                "/v1/fleet/firewall/restore",
+                params=_some(snapshot=snapshot, tag=tag),
+                timeout=60.0,
+            )
         )
 
     def update_status(self) -> UpdateStatus:
@@ -503,10 +523,10 @@ class WardenClient:
         """Ask that warden to run its own update command."""
         return str(self._request("POST", "/v1/update")["detail"])
 
-    def update_fleet(self) -> FleetUpdate:
+    def update_fleet(self, *, tag: str | None = None) -> FleetUpdate:
         """Ask every warden in the fleet to update itself."""
         return FleetUpdate.model_validate(
-            self._request("POST", "/v1/fleet/update", timeout=310.0)
+            self._request("POST", "/v1/fleet/update", params=_some(tag=tag), timeout=310.0)
         )
 
     def fleet_lookup(self, node: str, name: str) -> FleetRegistration:

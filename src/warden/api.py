@@ -31,7 +31,7 @@ from warden.core.health import examine, says, worst
 from warden.core.here import Here
 from warden.core.rounds import Rounds
 from warden.core.store import RuleStore, Snapshots, Store
-from warden.errors import NotPermittedError, WardenError
+from warden.errors import NotPermittedError, UnknownTagError, WardenError
 from warden.firewall import catalogue, guard, link
 from warden.firewall import model as firewall
 from warden.firewall.backends import base
@@ -424,19 +424,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         prefix="/v1/fleet", tags=["fleet"], dependencies=[Depends(known_caller)]
     )
 
+    def _picked(fleet: Fleet, tag: str | None) -> tuple[list[Node], bool]:
+        """The nodes a tag picks out, and whether this warden is one of them.
+
+        Nothing matching is a refusal rather than an empty answer: an apply
+        that quietly touched no machines is worse than one that would not run.
+        """
+        if tag is None:
+            return fleet.nodes(), True
+        chosen = fleet.tagged(tag)
+        mine = tag in settings.tags
+        if not chosen and not mine:
+            known = sorted(set(fleet.tags()) | set(settings.tags))
+            raise UnknownTagError(
+                f"no warden here is tagged {tag!r}"
+                + (f" - there is {', '.join(known)}" if known else " - none of them is tagged")
+            )
+        return chosen, mine
+
     @fleet_view.get("/services", summary="Everything the whole fleet holds")
     async def fleet_services(
         manager: Manager,
         fleet: FleetDep,
         project: str | None = None,
         kind: str | None = None,
+        tag: str | None = None,
     ) -> FleetServices:
+        chosen, mine = _picked(fleet, tag)
         async with aggregate.client(settings.cluster_token) as http:
             return await aggregate.gather_services(
                 http,
-                fleet.nodes(),
+                chosen,
                 here=settings.node,
-                local=manager.list(project=project, kind=kind),
+                local=manager.list(project=project, kind=kind) if mine else [],
                 project=project,
                 kind=kind,
             )
@@ -885,6 +905,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         fleet: FleetDep,
         rollback: int | None = None,
         snapshot: int | None = None,
+        tag: str | None = None,
     ) -> FleetFirewallResult:
         """Every node does it to its own firewall, and answers for itself.
 
@@ -907,26 +928,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "to open them again",
             )
 
-        try:
-            here = FirewallResult(
-                node=settings.node,
-                url=settings.advertise_url,
-                ok=True,
-                detail=aggregate._said(
-                    what, _here(what, rules, snapshots, rollback=seconds, snapshot=snapshot)
-                ),
-            )
-        except WardenError as exc:
-            here = FirewallResult(
-                node=settings.node, url=settings.advertise_url, ok=False, detail=exc.message
-            )
+        chosen, mine = _picked(fleet, tag)
+        here = None
+        if mine:
+            try:
+                here = FirewallResult(
+                    node=settings.node,
+                    url=settings.advertise_url,
+                    ok=True,
+                    detail=aggregate._said(
+                        what, _here(what, rules, snapshots, rollback=seconds, snapshot=snapshot)
+                    ),
+                )
+            except WardenError as exc:
+                here = FirewallResult(
+                    node=settings.node, url=settings.advertise_url, ok=False, detail=exc.message
+                )
 
         params: dict[str, object] = {"rollback": seconds} if what == "apply" else {}
         if snapshot is not None:
             params["snapshot"] = snapshot
         async with aggregate.client(settings.cluster_token, timeout=30.0) as http:
             return await aggregate.firewall_fleet(
-                http, fleet.nodes(), what, params=params, here=here
+                http, chosen, what, params=params, here=here
             )
 
 
@@ -948,20 +972,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"detail": updates.apply(settings)}
 
     @fleet_view.post("/update", summary="Ask every warden in the fleet to update itself")
-    async def update_everyone(fleet: FleetDep) -> FleetUpdate:
-        try:
-            here = UpdateResult(
-                node=settings.node,
-                url=settings.advertise_url,
-                ok=True,
-                detail=updates.apply(settings),
-            )
-        except WardenError as exc:
-            here = UpdateResult(
-                node=settings.node, url=settings.advertise_url, ok=False, detail=exc.message
-            )
+    async def update_everyone(fleet: FleetDep, tag: str | None = None) -> FleetUpdate:
+        chosen, mine = _picked(fleet, tag)
+        here = None
+        if mine:
+            try:
+                here = UpdateResult(
+                    node=settings.node,
+                    url=settings.advertise_url,
+                    ok=True,
+                    detail=updates.apply(settings),
+                )
+            except WardenError as exc:
+                here = UpdateResult(
+                    node=settings.node, url=settings.advertise_url, ok=False, detail=exc.message
+                )
         async with aggregate.client(settings.cluster_token, timeout=300.0) as http:
-            return await aggregate.update_fleet(http, fleet.nodes(), here=here)
+            return await aggregate.update_fleet(http, chosen, here=here)
 
     def may_change_the_firewall() -> None:
         """The switch that has to be thrown before a caller may touch the rules.

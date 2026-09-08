@@ -41,6 +41,7 @@ class Fleet:
             pool_start=announcement.pool_start,
             pool_end=announcement.pool_end,
             version=announcement.version,
+            tags=announcement.tags,
             first_seen=existing.first_seen if existing else now,
             last_seen=now,
             expires_at=now + timedelta(seconds=self.ttl),
@@ -94,6 +95,14 @@ class Fleet:
             node = next(one for one in known if one.name == name)
             self.store.announce(NODE, STALE, name, url=node.url, last_seen=node.last_seen)
         self._said_stale = gone
+
+    def tags(self) -> list[str]:
+        """Every tag any node carries, which is what a wrong one is answered with."""
+        return sorted({tag for node in self.store.list_nodes() for tag in node.tags})
+
+    def tagged(self, tag: str) -> list[Node]:
+        """The nodes carrying a tag. An empty match is the caller's to refuse."""
+        return [node for node in self.nodes() if tag in node.tags]
 
     def get(self, name: str) -> Node:
         node = self.store.get_node(name)

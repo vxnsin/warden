@@ -320,6 +320,22 @@ node that is never confirmed puts itself back without anybody driving there. A
 fleet-wide apply refuses to give that window up: it is the one place warden will
 not let it be left out.
 
+**And not always all of them.** A node says what it is, in its own
+configuration — `tags = ["web", "eu-west"]` — and it travels in the
+announcement it already sends, so the hub knows without anybody keeping a
+second list:
+
+```sh
+warden firewall apply --fleet --tag web --rollback 120
+warden update --fleet --tag eu-west
+warden ls --all --tag web
+```
+
+Kept on the machine rather than in groups on the hub: two places that know what
+a machine is disagree the first time one is rebuilt. A tag nothing carries is
+refused and told which ones exist — an apply that quietly touched no machines
+is worse than one that would not run.
+
 Reading the rules is what a token already allows. **Changing** them needs
 `allow_remote_firewall` set on the machine being asked, and it is off out of
 the box — a warden that will change its own firewall on request, listens beyond

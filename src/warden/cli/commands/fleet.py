@@ -38,6 +38,9 @@ def update(
     fleet: Annotated[
         bool, typer.Option("--fleet", help="Ask every warden in the fleet to update itself.")
     ] = False,
+    tagged: Annotated[
+        str | None, typer.Option("--tag", help="Only the nodes carrying this tag.")
+    ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask first.")] = False,
     url: UrlOption = None,
     token: TokenOption = None,
@@ -56,13 +59,14 @@ def update(
                 _show_update(client.update_status(), as_json=as_json, here=url is None)
                 return
 
-            what = "every warden in the fleet" if fleet else f"the warden at {client.url}"
+            what = f"every warden tagged {tagged}" if tagged else "every warden in the fleet"
+            what = what if fleet else f"the warden at {client.url}"
             if not yes and not typer.confirm(f"Update {what}?"):
                 console.print("left alone", style=theme.BONE_DIM)
                 return
 
             if fleet:
-                _show_fleet_update(client.update_fleet(), as_json=as_json)
+                _show_fleet_update(client.update_fleet(tag=tagged), as_json=as_json)
             else:
                 detail = client.update_self()
                 _dump({"detail": detail}) if as_json else console.print(detail)
@@ -174,7 +178,7 @@ def nodes(
         return
 
     table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
-    for column in ("NODE", "URL", "POOL", "VERSION", "STATUS", "LAST SEEN"):
+    for column in ("NODE", "URL", "POOL", "VERSION", "TAGS", "STATUS", "LAST SEEN"):
         table.add_column(column)
     for node in known:
         table.add_row(
@@ -182,6 +186,7 @@ def nodes(
             Text(node.url, style=theme.BONE_DIM),
             Text(node.pool, style=theme.GLOW),
             Text(node.version, style=theme.BONE_DIM),
+            Text(", ".join(node.tags) if node.tags else "-", style=theme.BONE_DIM),
             Text(node.status, style=NODE_COLOURS[node.status]),
             Text(theme.age(node.last_seen), style=theme.BONE_DIM),
         )
