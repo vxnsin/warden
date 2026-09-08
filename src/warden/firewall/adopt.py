@@ -13,12 +13,20 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 
+from warden.firewall import handwritten
 from warden.firewall.model import Action, Direction, Origin, Protocol, Rule
 
 TIMEOUT = 15.0
 
 UFW = "ufw"
 FIREWALLD = "firewalld"
+# Not a manager: a ruleset somebody wrote and loads at boot, with nothing
+# running to look after it. There is nothing to turn off when warden takes it
+# over, which is exactly why nobody notices it is there to lose.
+NFTABLES = "nftables"
+
+# The ones that can be told to stand down afterwards.
+MANAGERS = (UFW, FIREWALLD)
 
 
 @dataclass
@@ -30,6 +38,20 @@ class Reading:
     # Never silently dropped. A line nobody could translate is a door somebody
     # meant to open or close, and they should hear about it.
     untranslated: list[str] = field(default_factory=list)
+
+    @property
+    def seen(self) -> int:
+        """Everything that was there to read, whether it could be read or not."""
+        return len(self.rules) + len(self.untranslated)
+
+    @property
+    def whole(self) -> bool:
+        return not self.untranslated
+
+    @property
+    def mostly_lost(self) -> bool:
+        """More than half of it unreadable, which is not an adoption at all."""
+        return len(self.untranslated) * 2 > self.seen
 
 
 def _ask(command: list[str]) -> str | None:
@@ -54,7 +76,17 @@ def managing() -> list[str]:
     state = _ask(["firewall-cmd", "--state"])
     if state and "running" in state:
         found.append(FIREWALLD)
+    if not found and _handwritten():
+        # Only where nothing else claims the machine: ufw's rules are nftables
+        # rules too, and reading them twice would be reading them wrong.
+        found.append(NFTABLES)
     return found
+
+
+def _handwritten() -> bool:
+    """Whether there is a ruleset here that nothing is managing."""
+    said = _ask(["nft", "-j", "list", "ruleset"])
+    return bool(said) and handwritten.rules_in(said) > 0
 
 
 UFW_ROW = re.compile(
@@ -254,12 +286,48 @@ def from_firewalld(listing: str, zone_source: str = "any") -> Reading:
     return reading
 
 
+def from_nftables(said: str, listing: str = "") -> Reading:
+    """A ruleset somebody wrote by hand, as much of it as warden can hold.
+
+    `listing` is `nft -a list ruleset`, which is the same ruleset in the words
+    it was written in. Anything that could not be read is named in those words
+    rather than in warden's, because the person reading the report is the one
+    who wrote them.
+    """
+    reading = Reading(manager=NFTABLES)
+    taken, reading.untranslated = handwritten.read(said, listing)
+    for one in taken:
+        ports = one.get("ports", set())
+        rule = Rule(
+            name=_named(
+                reading.rules, one["action"], one["protocol"], ports, one.get("source", "any")
+            ),
+            direction=one["direction"],
+            action=one["action"],
+            protocol=one["protocol"],
+            ports=ports,
+            source=one.get("source", "any"),
+            destination=one.get("destination", "any"),
+            interface=one.get("interface"),
+            limit=one.get("limit"),
+            origin=Origin.ADOPTED,
+            comment=_as_comment("from a hand-written nftables ruleset"),
+        )
+        reading.rules.append(rule)
+    return reading
+
+
 def read(manager: str) -> Reading:
     """Ask a running firewall what it is holding."""
     if manager == UFW:
         return from_ufw(_ask(["ufw", "status", "numbered"]) or "")
     if manager == FIREWALLD:
         return from_firewalld(_ask(["firewall-cmd", "--list-all"]) or "")
+    if manager == NFTABLES:
+        return from_nftables(
+            _ask(["nft", "-j", "list", "ruleset"]) or "",
+            _ask(["nft", "-a", "list", "ruleset"]) or "",
+        )
     return Reading(manager=manager)
 
 
