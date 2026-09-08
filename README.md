@@ -258,6 +258,23 @@ confirm. Until then it is still enabled, so rolling back returns the machine
 exactly as it was. Anything it cannot translate is named before you decide —
 a rule quietly lost here is a door quietly left open.
 
+It also reads a ruleset **nothing** is managing — an `nft` file somebody wrote
+and loads at boot, which is the case where the first `warden firewall apply`
+would otherwise flush a working firewall with only the rollback window standing
+in the way. Most of a hand-written ruleset warden has no word for, and it says
+so rather than quietly keeping the half it understood:
+
+```
+nftables is holding 20 rules, 9 of which warden can hold
+
+9 rules warden cannot hold. Taking over drops them:
+  ct state established,related accept # handle 4  (matches on ct, ...)
+```
+
+Named in the words they were written in. `--yes` will not adopt a ruleset that
+could not be read whole, and more than half unreadable is refused outright
+unless you pass `--force`.
+
 **And because the registry is in the same program, a rule can belong to a
 service rather than to a number:**
 

@@ -66,11 +66,15 @@ def _rate(rule: firewall.Rule) -> Text:
 
 
 def _what(rule: firewall.Rule) -> str:
+    # An interface is only ever set by a rule adopted from somewhere else, and
+    # a rule that only applies on `lo` shown as if it applied everywhere is the
+    # kind of thing somebody confirms by reflex.
+    where = f" on {rule.interface}" if rule.interface else ""
     if rule.protocol in (firewall.Protocol.ICMP, firewall.Protocol.ANY):
-        return str(rule.protocol)
+        return str(rule.protocol) + where
     known = catalogue.named(rule.protocol, rule.ports)
     ports = firewall.spelled(rule.ports) or "any"
-    return f"{rule.protocol}/{ports}" + (f" ({known})" if known else "")
+    return f"{rule.protocol}/{ports}" + (f" ({known})" if known else "") + where
 
 
 def _rules_table(rules: list[firewall.Rule]) -> Table:
@@ -719,6 +723,9 @@ def firewall_adopt(
         int | None, typer.Option(help="Seconds to wait for a confirmation. 0 turns it off.")
     ] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask first.")] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Take over even though rules would be lost.")
+    ] = False,
     as_json: JsonOption = False,
 ) -> None:
     """Take over from the firewall that is managing this machine now.
@@ -726,6 +733,11 @@ def firewall_adopt(
     Reads its rules first, shows them, applies them as warden's own, and only
     turns the other one off once you have confirmed. Until then it is still
     enabled, so rolling back returns the machine exactly as it was.
+
+    Where nothing is managing the machine and there is an nftables ruleset
+    anyway - one somebody wrote and loads at boot - that is read too. It is the
+    case where the first `warden firewall apply` would otherwise flush a
+    working ruleset, with only the rollback window standing in the way.
     """
     settings = Settings()
     found = [manager] if manager else adopt.managing()
@@ -745,17 +757,28 @@ def firewall_adopt(
         )
         return
 
-    console.print(f"{taking} is holding {theme.plural(len(reading.rules), 'rule')}")
-    console.print(_rules_table(reading.rules))
-    for line in reading.untranslated:
-        errors.print(f"could not read: {line}", style=theme.SHRIEKER)
-    if reading.untranslated:
-        errors.print(
-            "those would be lost. Write them by hand first, or say no.",
-            style=theme.SHRIEKER,
-        )
+    _said_reading(taking, reading)
+    if reading.untranslated and not force:
+        # A ruleset warden can only half read is a ruleset somebody has to look
+        # at. `--yes` is for a run nobody is watching, and this is exactly the
+        # moment somebody should be.
+        if yes:
+            raise _fail(
+                WardenError(
+                    f"{theme.plural(len(reading.untranslated), 'rule')} could not be read, "
+                    "so --yes will not do it - read them and pass --force, or write them "
+                    "by hand first"
+                )
+            )
+        if reading.mostly_lost:
+            raise _fail(
+                WardenError(
+                    f"only {len(reading.rules)} of {reading.seen} rules can be held - "
+                    "that is not taking over from anything. Pass --force if you mean it"
+                )
+            )
 
-    if not yes and not typer.confirm(f"Take over from {taking}?"):
+    if not yes and not typer.confirm(_asking_to(taking, reading)):
         console.print("left alone", style=theme.BONE_DIM)
         return
 
@@ -775,11 +798,18 @@ def firewall_adopt(
     if waiting is not None:
         guard.start_watchdog(str(settings.database), waiting.deadline)
     console.print(f"{len(policy.rules)} rules applied", style=theme.MOSS)
-    console.print(
-        f"{taking} is still enabled and its rules are not loaded - confirming turns "
-        f"it off, restoring puts it back",
-        style=theme.BONE_DIM,
-    )
+    if taking in adopt.MANAGERS:
+        console.print(
+            f"{taking} is still enabled and its rules are not loaded - confirming turns "
+            f"it off, restoring puts it back",
+            style=theme.BONE_DIM,
+        )
+    else:
+        console.print(
+            "nothing was managing this machine, so there is nothing to turn off - "
+            "confirming keeps warden's ruleset, restoring puts the old one back",
+            style=theme.BONE_DIM,
+        )
     drifted = guard.pending(_rules().list(), _snapshots())
     if drifted:
         console.print(
@@ -789,6 +819,43 @@ def firewall_adopt(
         )
     if waiting is not None:
         _waiting_line(waiting)
+
+
+def _said_reading(taking: str, reading: adopt.Reading) -> None:
+    """What is there, what warden can hold, and what would be lost - in that order."""
+    held = theme.plural(reading.seen, "rule")
+    if reading.whole:
+        console.print(f"{taking} is holding {held}, all of which warden can hold")
+    else:
+        console.print(
+            f"{taking} is holding {held}, "
+            f"{len(reading.rules)} of which warden can hold",
+            style=theme.SHRIEKER,
+        )
+    console.print(_rules_table(reading.rules))
+    if not reading.untranslated:
+        return
+
+    errors.print()
+    errors.print(
+        f"{theme.plural(len(reading.untranslated), 'rule')} warden cannot hold. "
+        "Taking over drops them:",
+        style=theme.EMBER,
+    )
+    for line in reading.untranslated:
+        errors.print(f"  {line}", style=theme.SHRIEKER)
+    errors.print(
+        "A rule dropped here is a door left open or left shut. Write them by hand "
+        "first, or say no.",
+        style=theme.EMBER,
+    )
+    errors.print()
+
+
+def _asking_to(taking: str, reading: adopt.Reading) -> str:
+    if reading.whole:
+        return f"Take over from {taking}?"
+    return f"Take over from {taking}, losing {len(reading.untranslated)} of {reading.seen} rules?"
 
 
 @firewall_app.command("confirm")
