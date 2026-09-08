@@ -333,6 +333,39 @@ class RuleRequest(BaseModel):
     limit: str | None = None
 
 
+class Verdict(BaseModel):
+    """What would happen to one packet, and which line decided.
+
+    Arithmetic over the rules this warden holds - nothing was sent anywhere and
+    nothing was applied, so the answer is about the ruleset as written.
+    """
+
+    address: str
+    port: int
+    protocol: str
+    direction: str
+    action: str
+    # The rule that decided, or nothing where the default answered.
+    rule: str | None = None
+    why: str
+    # Rules that also name the other end, which depends on the address this
+    # machine happens to have. Named rather than counted as a match.
+    passed_over: list[str] = Field(default_factory=list)
+
+
+class NodeVerdict(Verdict):
+    """The same answer, and whose ruleset gave it."""
+
+    node: str
+
+
+class FleetVerdict(BaseModel):
+    """The same question asked everywhere, which is how the odd one out is found."""
+
+    verdicts: list[NodeVerdict]
+    unreachable: list[Unreachable]
+
+
 class Said(BaseModel):
     """One line of what a warden has to say about itself."""
 

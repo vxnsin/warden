@@ -6,7 +6,7 @@ import ipaddress
 import re
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 from pydantic import (
     BaseModel,
@@ -279,3 +279,94 @@ def placed(
         if rule.priority >= wanted and rule.name != new.name
     ]
     return [new.model_copy(update={"priority": wanted}), *moved]
+
+
+class Asked(BaseModel):
+    """One packet somebody wants an answer about, before there is one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    address: str
+    port: int = Field(ge=1, le=65535)
+    protocol: Protocol = Protocol.TCP
+    direction: Direction = Direction.IN
+
+    @field_validator("address")
+    @classmethod
+    def _an_address(cls, value: str) -> str:
+        try:
+            return str(ipaddress.ip_address(value.strip()))
+        except ValueError:
+            raise ValueError(f"{value!r} is not an address") from None
+
+
+class Decision(NamedTuple):
+    """What would happen to it, and which line decided."""
+
+    action: Action
+    rule: Rule | None
+    why: str
+    # Rules that name the other end as well, which depends on the address this
+    # machine happens to have. Named rather than counted as a match: a wrong
+    # answer here is worse than an incomplete one.
+    passed_over: tuple[str, ...] = ()
+
+
+def decides(policy: Policy, asked: Asked, now: datetime) -> Decision:
+    """Walk the rules in the order they will be applied and stop at the first that matches.
+
+    Arithmetic over rules warden already holds: no syscall, no root, nothing
+    applied. It answers for a ruleset on a laptop as readily as for the machine
+    it is meant for, which is the moment the cost of being wrong is lowest.
+    """
+    passed_over = []
+    for rule in policy.live(now):
+        if not _about(rule, asked):
+            continue
+        if _far(rule, asked) != ANYWHERE:
+            passed_over.append(rule.name)
+            continue
+        if _reaches(_near(rule, asked), asked.address):
+            return Decision(rule.action, rule, _because(rule), tuple(passed_over))
+
+    incoming = asked.direction is Direction.IN
+    default = policy.incoming if incoming else policy.outgoing
+    which = "incoming" if incoming else "outgoing"
+    return Decision(
+        default,
+        None,
+        f"nothing matched, and {which} defaults to {default.value}",
+        tuple(passed_over),
+    )
+
+
+def _about(rule: Rule, asked: Asked) -> bool:
+    """Whether the rule is about this kind of traffic at all."""
+    if rule.direction is not asked.direction:
+        return False
+    if rule.protocol is not Protocol.ANY and rule.protocol is not asked.protocol:
+        return False
+    # No ports at all is every port: that is what `any` and `icmp` rules are.
+    return not rule.ports or asked.port in rule.ports
+
+
+def _near(rule: Rule, asked: Asked) -> str:
+    """The end of the rule the address belongs to."""
+    return rule.source if asked.direction is Direction.IN else rule.destination
+
+
+def _far(rule: Rule, asked: Asked) -> str:
+    return rule.destination if asked.direction is Direction.IN else rule.source
+
+
+def _because(rule: Rule) -> str:
+    """The rule in one line, in the terms the question was asked in."""
+    where = spelled(rule.ports) or "any port"
+    said = f"{rule.protocol.value}/{where} from {rule.source}"
+    if rule.destination != ANYWHERE:
+        said += f" to {rule.destination}"
+    if rule.service:
+        said += f", opened for {rule.service}"
+    elif rule.comment:
+        said += f", {rule.comment}"
+    return said

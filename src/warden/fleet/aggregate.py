@@ -27,10 +27,12 @@ from warden.models import (
     FleetRules,
     FleetServices,
     FleetUpdate,
+    FleetVerdict,
     Listener,
     Node,
     NodeFirewall,
     NodePool,
+    NodeVerdict,
     PoolStatus,
     Registration,
     Report,
@@ -341,6 +343,39 @@ async def gather_reports(
     reports = [local, *(report for _, report in answered)]
     reports.sort(key=lambda one: one.node)
     return FleetReport(reports=reports, unreachable=unreachable)
+
+
+async def _verdict_of(
+    http: httpx.AsyncClient, node: Node, params: dict[str, str]
+) -> tuple[Node, NodeVerdict | None, str | None]:
+    try:
+        response = await http.get(f"{node.url}/v1/firewall/check", params=params)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return node, None, reason(exc)
+    return node, NodeVerdict(node=node.name, **response.json()), None
+
+
+async def gather_verdicts(
+    http: httpx.AsyncClient,
+    nodes: list[Node],
+    *,
+    here: str,
+    local: NodeVerdict,
+    params: dict[str, str],
+) -> FleetVerdict:
+    """The same question asked of every node's own ruleset.
+
+    Nothing is added up and nothing is agreed on: each machine decides for
+    itself what may cross it, and the point of asking all of them is finding
+    the one where the answer is different.
+    """
+    answers = await asyncio.gather(*(_verdict_of(http, node, params) for node in nodes))
+    answered, unreachable = _apart(answers)
+
+    verdicts = [local, *(verdict for _, verdict in answered)]
+    verdicts.sort(key=lambda one: one.node)
+    return FleetVerdict(verdicts=verdicts, unreachable=unreachable)
 
 
 async def _update_one(http: httpx.AsyncClient, node: Node) -> UpdateResult:

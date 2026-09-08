@@ -236,6 +236,22 @@ $ warden firewall allow 8000-8999 --from 10.0.0.0/8
 $ warden firewall deny 8080 --before allow-8000-8999
 ```
 
+**Would this get through?** The question a ruleset is actually read to answer,
+which is the one thing a list of rules does not show:
+
+```sh
+$ warden firewall check 10.0.0.5:8000
+allowed by allow-shop-api  -  tcp/8000 from 10.0.0.0/8, opened for shop-api
+$ warden firewall check 203.0.113.9:22
+denied by the policy  -  nothing matched, and incoming defaults to deny
+```
+
+It walks the rules in the order they will be applied and stops at the first
+that matches. No syscall, no root, nothing applied — arithmetic over rules
+warden already holds, so it answers on a laptop for a ruleset meant for a
+server, and `--all` asks every node in the fleet, which is how the one machine
+that answers differently gets found.
+
 `warden firewall adopt` takes over from ufw or firewalld: it reads their rules,
 shows them, applies them as its own, and turns the other one off only once you
 confirm. Until then it is still enabled, so rolling back returns the machine
