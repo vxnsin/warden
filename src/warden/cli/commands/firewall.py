@@ -261,8 +261,20 @@ def _rule_from(
     )
 
 
-def _write(rule: firewall.Rule, as_json: bool) -> None:
-    _rules().save(rule)
+def _write(
+    rule: firewall.Rule,
+    as_json: bool,
+    *,
+    before: str | None = None,
+    after: str | None = None,
+) -> None:
+    rules = _rules()
+    try:
+        writing = firewall.placed(rules.list(), rule, before=before, after=after)
+    except ValueError as exc:
+        raise _fail(WardenError(str(exc))) from exc
+    rules.save_many(writing)
+    rule = writing[0]
     if as_json:
         _dump(rule.model_dump(mode="json"))
         return
@@ -285,6 +297,14 @@ def firewall_allow(
     limit: Annotated[
         str | None,
         typer.Option(help="How often it may happen: 10/second, 6/minute."),
+    ] = None,
+    before: Annotated[
+        str | None,
+        typer.Option("--before", help="Put it in front of that rule."),
+    ] = None,
+    after: Annotated[
+        str | None,
+        typer.Option("--after", help="Put it behind that rule."),
     ] = None,
     lasts: Annotated[
         str | None,
@@ -310,7 +330,7 @@ def firewall_allow(
         )
     except (WardenError, ValueError) as exc:
         raise _fail(WardenError(str(getattr(exc, "message", exc)))) from exc
-    _write(rule, as_json)
+    _write(rule, as_json, before=before, after=after)
 
 
 @firewall_app.command("deny")
@@ -325,6 +345,14 @@ def firewall_deny(
     limit: Annotated[
         str | None,
         typer.Option(help="How often it may happen: 10/second, 6/minute."),
+    ] = None,
+    before: Annotated[
+        str | None,
+        typer.Option("--before", help="Put it in front of that rule."),
+    ] = None,
+    after: Annotated[
+        str | None,
+        typer.Option("--after", help="Put it behind that rule."),
     ] = None,
     lasts: Annotated[
         str | None,
@@ -349,7 +377,7 @@ def firewall_deny(
         )
     except (WardenError, ValueError) as exc:
         raise _fail(WardenError(str(getattr(exc, "message", exc)))) from exc
-    _write(rule, as_json)
+    _write(rule, as_json, before=before, after=after)
 
 
 @firewall_app.command("open")

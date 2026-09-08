@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS rules (
     comment     TEXT,
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
-    "limit"     TEXT
+    "limit"     TEXT,
+    priority    INTEGER NOT NULL DEFAULT 100
 );
 CREATE INDEX IF NOT EXISTS rules_origin ON rules (origin);
 CREATE INDEX IF NOT EXISTS rules_service ON rules (service);
@@ -123,6 +124,7 @@ ADDED_COLUMNS = {"ttl": "INTEGER"}
 ADDED_RULE_COLUMNS = {
     # `limit` is a keyword in SQL, so it is quoted everywhere it appears.
     '"limit"': "TEXT",
+    "priority": "INTEGER NOT NULL DEFAULT 100",
 }
 
 ADDED_EVENT_COLUMNS = {
@@ -585,6 +587,7 @@ def _row_to_rule(row: sqlite3.Row) -> Rule:
         comment=row["comment"],
         enabled=bool(row["enabled"]),
         limit=_column(row, "limit", None),
+        priority=_column(row, "priority", 100),
     )
 
 
@@ -605,7 +608,9 @@ class RuleStore:
         if origin:
             query += " WHERE origin = ?"
             params.append(origin)
-        query += " ORDER BY created_at, name"
+        # The order they will be applied in, which for a firewall is what the
+        # ruleset means rather than how it is displayed.
+        query += " ORDER BY priority, created_at, name"
         with self._store._lock:
             rows = self._store._db.execute(query, params).fetchall()
         return [_row_to_rule(row) for row in rows]
@@ -631,8 +636,8 @@ class RuleStore:
                         INSERT INTO rules
                             (name, direction, action, protocol, ports, source,
                              destination, interface, origin, service, expires_at,
-                             comment, enabled, created_at, "limit")
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             comment, enabled, created_at, "limit", priority)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(name) DO UPDATE SET
                             direction = excluded.direction,
                             action = excluded.action,
@@ -646,7 +651,8 @@ class RuleStore:
                             expires_at = excluded.expires_at,
                             comment = excluded.comment,
                             enabled = excluded.enabled,
-                            "limit" = excluded."limit"
+                            "limit" = excluded."limit",
+                            priority = excluded.priority
                         """,
                         (
                             rule.name,
@@ -664,6 +670,7 @@ class RuleStore:
                             int(rule.enabled),
                             now,
                             rule.limit,
+                            rule.priority,
                         ),
                     )
             except Exception:

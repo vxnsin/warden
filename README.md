@@ -211,6 +211,17 @@ without it.
 A rule can also carry a clock — `--for 2h` — and closes itself when the time is
 up, the same way one bound to a service closes when its lease lapses.
 
+**Order is part of the ruleset.** Every firewall warden writes for stops at the
+first rule that matches, so a `deny` written after a wider `allow` never runs.
+Rules are applied in the order they were written; `--before` and `--after` put
+a new one somewhere else, and `warden doctor` names any rule that can never be
+reached and which one is in front of it:
+
+```sh
+$ warden firewall allow 8000-8999 --from 10.0.0.0/8
+$ warden firewall deny 8080 --before allow-8000-8999
+```
+
 `warden firewall adopt` takes over from ufw or firewalld: it reads their rules,
 shows them, applies them as its own, and turns the other one off only once you
 confirm. Until then it is still enabled, so rolling back returns the machine
