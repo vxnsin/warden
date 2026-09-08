@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from warden.models import FIREWALL, NODE, PORT, Event
+from warden.models import FIREWALL, HEALTH, NODE, PORT, Event
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,8 @@ EVERY = (
     Happening(FIREWALL, "confirmed", "somebody kept it, and the rollback was called off"),
     Happening(FIREWALL, "rolled_back", "nobody confirmed, so the machine went back"),
     Happening(FIREWALL, "restored", "a snapshot was put back by hand", notable=False),
+    Happening(HEALTH, "worsened", "a check that was fine started saying something is wrong"),
+    Happening(HEALTH, "recovered", "one that was saying so has stopped"),
 )
 
 NAMES = tuple(happening.full for happening in EVERY)
@@ -86,4 +88,11 @@ def like(name: str) -> Event:
             subject="build-01",
             body={"url": "http://build-01:7010"},
         )
+    if scope == HEALTH:
+        said = (
+            {"level": "ok", "says": "nothing since the last apply"}
+            if action == "recovered"
+            else {"level": "warn", "says": "3 rules changed since the last apply"}
+        )
+        return Event(at=now, scope=scope, action=action, subject="firewall", body=said)
     return Event(at=now, scope=scope, action=action, subject="nftables", body={"rules": 12})

@@ -10,14 +10,14 @@ from warden.core import happenings
 from warden.core.config import Settings
 from warden.core.store import Store
 from warden.fleet.nodes import Fleet
-from warden.models import Event, NodeAnnouncement
+from warden.models import SCOPES, Event, NodeAnnouncement
 
 runner = CliRunner()
 
 
 def test_every_event_is_named_once_and_belongs_to_a_scope():
     assert len(happenings.NAMES) == len(set(happenings.NAMES))
-    assert {one.scope for one in happenings.EVERY} == {"port", "node", "firewall"}
+    assert {one.scope for one in happenings.EVERY} == set(SCOPES)
 
 
 def test_a_renewal_is_still_not_posted_by_default():

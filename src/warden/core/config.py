@@ -284,6 +284,12 @@ class Settings(BaseSettings):
     # existed behaves exactly as it did.
     tokens: TokenSet = Field(default_factory=list)
 
+    # Doctor on a timer, announcing a finding when it changes rather than what
+    # it found. Minutes, not seconds: it reads the database and asks the
+    # firewall backend, which is not free.
+    health_watch: bool = True
+    health_interval: int = Field(default=10 * 60, ge=60)
+
     update_check: bool = True
     update_repo: str = "vxnsin/warden"
     update_interval: int = Field(default=6 * 60 * 60, ge=300)
