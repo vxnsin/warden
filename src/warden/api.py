@@ -21,11 +21,14 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from warden import __version__
 from warden.core import asking, config, metrics, updates
 from warden.core.config import Grant, Settings
 from warden.core.events import EventBus
+from warden.core.health import examine, says, worst
+from warden.core.here import Here
 from warden.core.store import RuleStore, Snapshots, Store
 from warden.errors import NotPermittedError, WardenError
 from warden.firewall import catalogue, guard, link
@@ -44,6 +47,7 @@ from warden.models import (
     FleetListeners,
     FleetPool,
     FleetRegistration,
+    FleetReport,
     FleetRules,
     FleetServices,
     FleetUpdate,
@@ -57,7 +61,9 @@ from warden.models import (
     PoolStatus,
     Registration,
     RegistrationRequest,
+    Report,
     RuleRequest,
+    Said,
     UpdateResult,
     UpdateStatus,
     WebhookStatus,
@@ -452,6 +458,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Reading is what a token already allows, here as much as on one machine.
     # `firewall_status` and `firewall_rules` are the same handlers the single
     # node uses, called for this warden's own answer before anyone is asked.
+    @fleet_view.get("/doctor", summary="What every node has to say about itself")
+    async def fleet_doctor(
+        request: Request, manager: Manager, fleet: FleetDep, bus: Events
+    ) -> FleetReport:
+        mine = await run_in_threadpool(_report, request, manager, fleet, bus)
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.gather_reports(http, fleet.nodes(), local=mine)
+
     @fleet_view.get("/firewall", summary="Every node's firewall at once")
     async def fleet_firewall(
         rules: Rules, snapshots: SnapshotsDep, fleet: FleetDep
@@ -607,6 +621,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @reads.get("/update", summary="Whether a newer warden exists")
     def update_status(request: Request) -> UpdateStatus:
         return request.app.state.updates.status
+
+    # Read from inside rather than over HTTP: the checks are written against a
+    # client, and a warden making a request of itself to say how it is would be
+    # the one machine in a fleet that reports on its own network instead of its
+    # own state. Sync, so uvicorn keeps it off the loop - `_holders` walks the
+    # machine's sockets and `_upstream` asks another machine entirely.
+    @reads.get("/doctor", summary="What this warden has to say about itself")
+    def doctor(request: Request, manager: Manager, fleet: FleetDep, bus: Events) -> Report:
+        return _report(request, manager, fleet, bus)
+
+    def _report(request: Request, manager: Registry, fleet: Fleet, bus: EventBus) -> Report:
+        here = Here(settings, manager, fleet, bus, request.app.state.updates)
+        checks = examine(here, settings)
+        return Report(
+            node=settings.node,
+            worst=worst(checks),
+            says=says(checks),
+            checks=[Said(level=check.level, text=check.text) for check in checks],
+        )
 
     # Changing one node's firewall from the hub. The node's own
     # `allow_remote_firewall` still decides, and its refusal comes back in its

@@ -23,6 +23,7 @@ from warden.models import (
     FleetListeners,
     FleetPool,
     FleetRegistration,
+    FleetReport,
     FleetRules,
     FleetServices,
     FleetUpdate,
@@ -32,6 +33,7 @@ from warden.models import (
     NodePool,
     PoolStatus,
     Registration,
+    Report,
     Unreachable,
     UpdateResult,
 )
@@ -310,6 +312,35 @@ async def gather_rules(
         rules.extend({**rule, "node": name} for rule in theirs)
     rules.sort(key=lambda rule: (str(rule.get("node")), str(rule.get("name"))))
     return FleetRules(rules=rules, unreachable=unreachable)
+
+
+async def _doctor_of(
+    http: httpx.AsyncClient, node: Node
+) -> tuple[Node, Report | None, str | None]:
+    try:
+        response = await http.get(f"{node.url}/v1/doctor")
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return node, None, reason(exc)
+    return node, Report.model_validate(response.json()), None
+
+
+async def gather_reports(
+    http: httpx.AsyncClient, nodes: list[Node], *, local: Report
+) -> FleetReport:
+    """What every node in the fleet has to say about itself.
+
+    Each machine examines itself, because half of what `warden doctor` reads -
+    its settings, its firewall, whether it can reach the hub - only exists on
+    the machine it is about. A hub asking on their behalf would answer for
+    itself forty times.
+    """
+    answers = await asyncio.gather(*(_doctor_of(http, node) for node in nodes))
+    answered, unreachable = _apart(answers)
+
+    reports = [local, *(report for _, report in answered)]
+    reports.sort(key=lambda one: one.node)
+    return FleetReport(reports=reports, unreachable=unreachable)
 
 
 async def _update_one(http: httpx.AsyncClient, node: Node) -> UpdateResult:

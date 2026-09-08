@@ -332,6 +332,37 @@ class RuleRequest(BaseModel):
     limit: str | None = None
 
 
+class Said(BaseModel):
+    """One line of what a warden has to say about itself."""
+
+    level: str
+    text: str
+
+
+class Report(BaseModel):
+    """Everything one warden knows is wrong with it.
+
+    `worst` and `says` are the same summary the fleet view shows, worked out
+    where the checks are rather than by whoever reads them.
+    """
+
+    node: str
+    worst: str
+    says: str
+    checks: list[Said]
+
+
+class FleetReport(BaseModel):
+    """What every node has to say, and the ones that could not be asked.
+
+    A node that did not answer is the loudest thing in a fleet view, so it is
+    kept here and shown as a failure rather than left out of the count.
+    """
+
+    reports: list[Report]
+    unreachable: list[Unreachable]
+
+
 class NodeFirewall(FirewallStatus):
     """One node's firewall, and whose it is."""
 

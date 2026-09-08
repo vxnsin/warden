@@ -25,6 +25,7 @@ from warden.models import (
     FleetListeners,
     FleetPool,
     FleetRegistration,
+    FleetReport,
     FleetRules,
     FleetServices,
     FleetUpdate,
@@ -33,6 +34,7 @@ from warden.models import (
     Node,
     PoolStatus,
     Registration,
+    Report,
     UpdateStatus,
     WebhookStatus,
 )
@@ -366,6 +368,14 @@ class WardenClient:
         """Put a snapshot back, whether or not one was waiting."""
         params = {"snapshot": snapshot} if snapshot is not None else None
         return int(self._request("POST", "/v1/firewall/restore", params=params)["restored"])
+
+    def doctor(self) -> Report:
+        """What that warden has to say about itself, examined where it runs."""
+        return Report.model_validate(self._request("GET", "/v1/doctor"))
+
+    def fleet_doctor(self) -> FleetReport:
+        """The same from every node, each having examined itself."""
+        return FleetReport.model_validate(self._request("GET", "/v1/fleet/doctor"))
 
     def fleet_firewall(self) -> FleetFirewall:
         """Every node's firewall at once, and the ones that did not answer."""

@@ -28,6 +28,7 @@ from warden.cli.shared import (
 from warden.core import autostart, config, happenings, health, moving, store, webhooks
 from warden.core.config import PARTS, Settings
 from warden.errors import WardenError
+from warden.models import FleetReport
 
 ORDER = 10
 
@@ -659,8 +660,81 @@ def service_status(as_json: JsonOption = False) -> None:
     _say_notes(starter)
 
 
+def _worst_of(found: FleetReport) -> str:
+    """A node nobody could reach is the loudest thing in a fleet view."""
+    if found.unreachable:
+        return health.FAIL
+    return max((one.worst for one in found.reports), key=health.LOUDEST.index, default=health.OK)
+
+
+def _level(level: str) -> Text:
+    return Text(level, style=health.LEVEL_COLOURS[level])
+
+
+def _fleet_doctor(url: str | None, token: str | None, *, as_json: bool, verbose: bool) -> None:
+    """One line per node, the worst thing each has to say, worst overall as the code."""
+    with shared._client(url, token) as client:
+        try:
+            found = client.fleet_doctor()
+        except WardenError as exc:
+            raise _fail(exc) from exc
+
+    if as_json:
+        _dump(found.model_dump(mode="json"))
+        raise typer.Exit(1 if _worst_of(found) == health.FAIL else 0)
+
+    if verbose:
+        _every_line(found)
+    else:
+        table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+        table.add_column("NODE")
+        table.add_column("WORST")
+        table.add_column("SAYS", overflow="fold")
+        for one in sorted(found.reports, key=lambda one: one.node):
+            table.add_row(Text(one.node, style=theme.AMETHYST), _level(one.worst), one.says)
+        for node in found.unreachable:
+            table.add_row(
+                Text(node.node, style=theme.AMETHYST),
+                _level(health.FAIL),
+                f"could not be reached - {node.reason}",
+            )
+        console.print(table)
+
+    said = [one.worst for one in found.reports]
+    console.print(
+        f"{said.count(health.FAIL) + len(found.unreachable)} failing, "
+        f"{said.count(health.WARN)} warning, of {len(said) + len(found.unreachable)}",
+        style=theme.BONE_DIM,
+    )
+    raise typer.Exit(1 if _worst_of(found) == health.FAIL else 0)
+
+
+def _every_line(found: FleetReport) -> None:
+    for one in sorted(found.reports, key=lambda one: one.node):
+        console.print(Text(one.node, style=theme.AMETHYST))
+        table = Table(box=None, pad_edge=False, show_header=False, padding=(0, 1, 0, 2))
+        table.add_column(no_wrap=True)
+        table.add_column(overflow="fold")
+        for check in one.checks:
+            table.add_row(_level(check.level), check.text)
+        console.print(table)
+    for node in found.unreachable:
+        console.print(Text(node.node, style=theme.AMETHYST))
+        console.print(
+            Text("  fail", style=health.LEVEL_COLOURS[health.FAIL]),
+            f"{node.url} - {node.reason}",
+        )
+
+
 @app.command()
 def doctor(
+    every: Annotated[
+        bool, typer.Option("--all", help="Every warden in the fleet, not just this one.")
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Every line each node had, not only the worst."),
+    ] = False,
     url: UrlOption = None,
     token: TokenOption = None,
     as_json: JsonOption = False,
@@ -669,7 +743,13 @@ def doctor(
 
     Exits 1 only when something failed, so a warning about an unset token does
     not make a health check call the machine down.
+
+    `--all` asks every node through the hub, each examining itself: half of what
+    this reads only exists on the machine it is about.
     """
+    if every:
+        _fleet_doctor(url, token, as_json=as_json, verbose=verbose)
+        return
     with shared._client(url, token) as client:
         checks = health.examine(client, Settings())
 
