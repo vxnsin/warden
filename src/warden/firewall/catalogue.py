@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -72,6 +73,22 @@ def named_for(protocol: str, ports: set[int]) -> str | None:
     return named(Protocol(protocol), ports)
 
 
+PORTS = re.compile(r"^(\d{1,5})(?:-(\d{1,5}))?$")
+
+
+def numbered(what: str) -> bool:
+    """Whether this is a port or a range of them rather than a name."""
+    return PORTS.match(what) is not None
+
+
+def _ports_in(what: str) -> set[int]:
+    found = PORTS.match(what)
+    first, last = int(found[1]), int(found[2] or found[1])
+    if not 1 <= first <= last <= 65535:
+        raise ValueError(f"{what!r} is not a port or a range of them")
+    return set(range(first, last + 1))
+
+
 def rule_for(
     what: str,
     *,
@@ -89,8 +106,10 @@ def rule_for(
     rule for the same words - a rule that means one thing typed and another
     thing asked for is worse than either.
     """
-    if what.isdigit():
-        ports = {int(what)}
+    if numbered(what):
+        # The docstring has promised a range since this was written; it just
+        # never read one.
+        ports = _ports_in(what)
         kind = Protocol(protocol or "tcp")
         origin = Origin.MANUAL
         name = f"{action}-{what}"

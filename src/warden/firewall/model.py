@@ -110,6 +110,10 @@ class Rule(BaseModel):
     destination: str = ANYWHERE
     interface: Interface | None = None
     origin: Origin = Origin.MANUAL
+    # Where in the ruleset this goes. Lower runs first, because every firewall
+    # warden writes for stops at the first rule that matches - so the order is
+    # not a presentation detail, it is what the ruleset means.
+    priority: int = 100
     # How often this may happen, where the rule lets something through and the
     # backend can say so. `10/second`, `6/minute`.
     limit: Limit | None = None
@@ -162,8 +166,15 @@ class Policy(BaseModel):
     rules: list[Rule] = Field(default_factory=list)
 
     def live(self, now: datetime) -> list[Rule]:
-        """What actually applies: enabled, and not outlived by its service."""
-        return [rule for rule in self.rules if rule.enabled and not rule.expired(now)]
+        """What actually applies, in the order it will be asked.
+
+        Sorted here rather than left to whoever built the list: a backend that
+        wrote them in another order would be writing another ruleset.
+        """
+        return sorted(
+            (rule for rule in self.rules if rule.enabled and not rule.expired(now)),
+            key=lambda rule: rule.priority,
+        )
 
 
 def runs(ports: set[int]) -> list[tuple[int, int]]:
@@ -186,3 +197,85 @@ def spelled(ports: set[int], joiner: str = ",") -> str:
     return joiner.join(
         str(first) if first == last else f"{first}-{last}" for first, last in runs(ports)
     )
+
+
+def covers(first: Rule, second: Rule) -> bool:
+    """Whether everything `second` matches, `first` matches first.
+
+    Every firewall warden writes for stops at the first rule that matches, so a
+    rule underneath one that covers it is a rule that never runs. Asked of the
+    pair rather than of a packet: this is about the ruleset, not about traffic.
+    """
+    if first.direction is not second.direction:
+        return False
+    if first.protocol is not Protocol.ANY and first.protocol is not second.protocol:
+        return False
+    if first.ports and not second.ports:
+        return False
+    if first.ports and not second.ports <= first.ports:
+        return False
+    return _reaches(first.source, second.source) and _reaches(
+        first.destination, second.destination
+    )
+
+
+def _reaches(wider: str, narrower: str) -> bool:
+    """Whether the first address covers everything the second one does."""
+    if wider == ANYWHERE:
+        return True
+    if narrower == ANYWHERE:
+        return False
+    try:
+        return ipaddress.ip_network(narrower, strict=False).subnet_of(
+            ipaddress.ip_network(wider, strict=False)
+        )
+    except (TypeError, ValueError):
+        # One is IPv4 and the other IPv6, so neither reaches the other.
+        return False
+
+
+def shadowed(rules: list[Rule]) -> list[tuple[Rule, Rule]]:
+    """Rules that can never run, each with the one standing in front of it.
+
+    In the order they will be applied, so a rule is only ever shadowed by one
+    that comes before it.
+    """
+    found = []
+    for index, rule in enumerate(rules):
+        earlier = next((one for one in rules[:index] if covers(one, rule)), None)
+        if earlier is not None:
+            found.append((rule, earlier))
+    return found
+
+
+# What a rule gets when nobody says where it goes, and the room left between
+# two of them for one to be slipped in later.
+DEFAULT_PRIORITY = 100
+STEP = 10
+
+
+def placed(
+    rules: list[Rule], new: Rule, *, before: str | None = None, after: str | None = None
+) -> list[Rule]:
+    """Where a new rule goes, and every rule that has to move for it.
+
+    Returns what to write, the new rule included. Renumbering rather than
+    fractions: the number is a detail of the ordering, and one somebody can
+    read in a listing is worth more than one that never has to be rewritten.
+    """
+    if before is None and after is None:
+        highest = max((rule.priority for rule in rules), default=DEFAULT_PRIORITY - STEP)
+        return [new.model_copy(update={"priority": highest + STEP})]
+
+    named = before or after
+    anchor = next((rule for rule in rules if rule.name == named), None)
+    if anchor is None:
+        raise ValueError(f"no rule called {named!r} to go {'before' if before else 'after'}")
+
+    wanted = anchor.priority if before else anchor.priority + 1
+    moved = [
+        rule.model_copy(update={"priority": rule.priority + STEP})
+        for rule in rules
+        if rule.priority >= wanted and rule.name != new.name
+    ]
+    return [new.model_copy(update={"priority": wanted}), *moved]

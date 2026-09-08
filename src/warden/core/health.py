@@ -246,7 +246,28 @@ def _firewall(settings: Settings) -> list[Check]:
             Check(NOTE, f"{_many(len(theirs), 'rule')} opened for a registered service")
         )
     checks.extend(_closing_on_their_own(rules))
+    checks.extend(_never_reached(rules))
     return checks
+
+
+def _never_reached(rules: list) -> list[Check]:
+    """Rules with another one standing in front of them.
+
+    A firewall stops at the first rule that matches, so a rule underneath one
+    that covers it is in the ruleset and has no effect. Believing a rule is in
+    force when it is not is the most expensive thing warden can let happen.
+    """
+    from warden.firewall.model import Policy, shadowed
+
+    hidden = shadowed(Policy(rules=rules).live(datetime.now(UTC)))
+    return [
+        Check(
+            WARN,
+            f"{rule.name} can never run - {earlier.name} is in front of it and "
+            f"covers it. `warden firewall allow ... --before {earlier.name}` moves it",
+        )
+        for rule, earlier in hidden
+    ]
 
 
 def _closing_on_their_own(rules: list) -> list[Check]:
