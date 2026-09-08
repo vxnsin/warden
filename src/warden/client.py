@@ -29,6 +29,7 @@ from warden.models import (
     FleetRules,
     FleetServices,
     FleetUpdate,
+    FleetVerdict,
     Health,
     Listener,
     Node,
@@ -36,6 +37,7 @@ from warden.models import (
     Registration,
     Report,
     UpdateStatus,
+    Verdict,
     WebhookStatus,
 )
 
@@ -376,6 +378,42 @@ class WardenClient:
     def fleet_doctor(self) -> FleetReport:
         """The same from every node, each having examined itself."""
         return FleetReport.model_validate(self._request("GET", "/v1/fleet/doctor"))
+
+    def firewall_check(
+        self,
+        address: str,
+        port: int,
+        *,
+        protocol: str = "tcp",
+        direction: str = "in",
+    ) -> Verdict:
+        """Whether one packet would get through that machine, and which rule decides."""
+        params = {
+            "address": address,
+            "port": port,
+            "protocol": protocol,
+            "direction": direction,
+        }
+        return Verdict.model_validate(self._request("GET", "/v1/firewall/check", params=params))
+
+    def fleet_firewall_check(
+        self,
+        address: str,
+        port: int,
+        *,
+        protocol: str = "tcp",
+        direction: str = "in",
+    ) -> FleetVerdict:
+        """The same question asked of every node's own ruleset."""
+        params = {
+            "address": address,
+            "port": port,
+            "protocol": protocol,
+            "direction": direction,
+        }
+        return FleetVerdict.model_validate(
+            self._request("GET", "/v1/fleet/firewall/check", params=params)
+        )
 
     def fleet_firewall(self) -> FleetFirewall:
         """Every node's firewall at once, and the ones that did not answer."""

@@ -52,12 +52,14 @@ from warden.models import (
     FleetRules,
     FleetServices,
     FleetUpdate,
+    FleetVerdict,
     GroupRequest,
     Health,
     HeartbeatRequest,
     Listener,
     Node,
     NodeAnnouncement,
+    NodeVerdict,
     OpenRequest,
     PoolStatus,
     Registration,
@@ -67,6 +69,7 @@ from warden.models import (
     Said,
     UpdateResult,
     UpdateStatus,
+    Verdict,
     WebhookStatus,
 )
 from warden.ports.allocator import PortPool
@@ -486,6 +489,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 fleet.nodes(),
                 here=settings.node,
                 local=firewall_status(rules, snapshots),
+            )
+
+    @fleet_view.get(
+        "/firewall/check", summary="Whether one packet would get through, on every node"
+    )
+    async def fleet_firewall_check(
+        rules: Rules,
+        fleet: FleetDep,
+        address: str,
+        port: int,
+        protocol: firewall.Protocol = firewall.Protocol.TCP,
+        direction: firewall.Direction = firewall.Direction.IN,
+    ) -> FleetVerdict:
+        asked = _asked(address, port, protocol, direction)
+        mine = NodeVerdict(node=settings.node, **_verdict(rules, asked).model_dump())
+        params = {
+            "address": asked.address,
+            "port": str(asked.port),
+            "protocol": asked.protocol.value,
+            "direction": asked.direction.value,
+        }
+        async with aggregate.client(settings.cluster_token) as http:
+            return await aggregate.gather_verdicts(
+                http, fleet.nodes(), here=settings.node, local=mine, params=params
             )
 
     @fleet_view.get("/firewall/rules", summary="Every rule anywhere in the fleet")
@@ -987,6 +1014,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @firewall_reads.get("/rules", summary="Every rule this machine holds")
     def firewall_rules(rules: Rules, origin: str | None = None) -> list[firewall.Rule]:
         return rules.list(origin=origin)
+
+    @firewall_reads.get(
+        "/check",
+        summary="Whether one packet would get through, and which rule decides",
+        responses={status.HTTP_422_UNPROCESSABLE_ENTITY: {"model": ErrorResponse}},
+    )
+    def firewall_check(
+        rules: Rules,
+        address: str,
+        port: int,
+        protocol: firewall.Protocol = firewall.Protocol.TCP,
+        direction: firewall.Direction = firewall.Direction.IN,
+    ) -> Verdict:
+        return _verdict(rules, _asked(address, port, protocol, direction))
+
+    def _asked(
+        address: str, port: int, protocol: firewall.Protocol, direction: firewall.Direction
+    ) -> firewall.Asked:
+        try:
+            return firewall.Asked(
+                address=address, port=port, protocol=protocol, direction=direction
+            )
+        except ValidationError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    def _verdict(rules: RuleStore, asked: firewall.Asked) -> Verdict:
+        policy = firewall.Policy(rules=rules.list())
+        found = firewall.decides(policy, asked, datetime.now(UTC))
+        return Verdict(
+            address=asked.address,
+            port=asked.port,
+            protocol=asked.protocol.value,
+            direction=asked.direction.value,
+            action=found.action.value,
+            rule=found.rule.name if found.rule else None,
+            why=found.why,
+            passed_over=list(found.passed_over),
+        )
 
     @firewall_writes.post(
         "/open",

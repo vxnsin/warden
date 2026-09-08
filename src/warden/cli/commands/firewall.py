@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 from rich.table import Table
 from rich.text import Text
 
@@ -926,6 +927,151 @@ def firewall_pending(as_json: JsonOption = False) -> None:
         "`warden firewall apply` makes them true",
         style=theme.BONE_DIM,
     )
+
+
+def _apart(said: str) -> tuple[str, int]:
+    """`10.0.0.5:8000` as an address and a port, or a message about why not."""
+    address, sep, port = said.rpartition(":")
+    if not sep or not port.isdigit():
+        raise _fail(WardenError(f"{said!r} is not an address and a port - try 10.0.0.5:8000"))
+    # An IPv6 address is written in brackets when a port follows it.
+    return address.strip("[]"), int(port)
+
+
+def _asked(said: str, *, udp: bool, out: bool) -> firewall.Asked:
+    address, port = _apart(said)
+    try:
+        return firewall.Asked(
+            address=address,
+            port=port,
+            protocol=firewall.Protocol.UDP if udp else firewall.Protocol.TCP,
+            direction=firewall.Direction.OUT if out else firewall.Direction.IN,
+        )
+    except ValidationError as exc:
+        raise _fail(WardenError(str(exc.errors()[0]["ctx"]["error"]))) from exc
+
+
+HAPPENED = {"allow": "allowed", "deny": "denied", "reject": "rejected"}
+
+
+def _said(action: str, name: str | None) -> Text:
+    """The answer in one line: allowed by a rule, or denied by the policy."""
+    style = theme.MOSS if action == "allow" else theme.EMBER
+    return Text(f"{HAPPENED.get(action, action)} by {name or 'the policy'}", style=style)
+
+
+def _passed_over(names: list[str]) -> None:
+    if names:
+        errors.print(
+            f"{theme.plural(len(names), 'rule')} passed over - "
+            f"{', '.join(names)} also name the other end, which depends on the "
+            "address this machine has",
+            style=theme.BONE_DIM,
+        )
+
+
+@firewall_app.command("check")
+def firewall_check(
+    what: Annotated[str, typer.Argument(help="An address and a port: 10.0.0.5:8000")],
+    udp: Annotated[bool, typer.Option("--udp", help="Ask about udp instead of tcp.")] = False,
+    out: Annotated[bool, typer.Option("--out", help="Ask about traffic leaving.")] = False,
+    every: Annotated[
+        bool, typer.Option("--all", help="Ask every warden in the fleet, not just this one.")
+    ] = False,
+    on: Annotated[
+        str | None, typer.Option("--on", help="Ask the warden at this address instead.")
+    ] = None,
+    url: UrlOption = None,
+    token: TokenOption = None,
+    as_json: JsonOption = False,
+) -> None:
+    """Would this get through, and which rule decides.
+
+    It walks the rules in the order they will be applied and stops at the first
+    that matches. Nothing is sent anywhere and nothing is applied: it is
+    arithmetic over the rules warden already holds, so it answers for a ruleset
+    on a laptop as readily as for the machine it is meant for.
+    """
+    asked = _asked(what, udp=udp, out=out)
+    if every:
+        _check_the_fleet(url, token, asked, as_json=as_json)
+        return
+    if on:
+        found = _asking(
+            on,
+            token,
+            lambda client: client.firewall_check(
+                asked.address,
+                asked.port,
+                protocol=asked.protocol.value,
+                direction=asked.direction.value,
+            ),
+        )
+        _said_verdict(found, as_json=as_json)
+        return
+
+    _said_closed(_tidy())
+    policy = firewall.Policy(rules=_rules().list())
+    decision = firewall.decides(policy, asked, datetime.now(UTC))
+    if as_json:
+        _dump(
+            {
+                "address": asked.address,
+                "port": asked.port,
+                "protocol": asked.protocol.value,
+                "direction": asked.direction.value,
+                "action": decision.action.value,
+                "rule": decision.rule.name if decision.rule else None,
+                "why": decision.why,
+                "passed_over": list(decision.passed_over),
+            }
+        )
+        return
+    said = _said(decision.action.value, decision.rule.name if decision.rule else None)
+    said.append(f"  -  {decision.why}", style=theme.BONE_DIM)
+    console.print(said)
+    _passed_over(list(decision.passed_over))
+
+
+def _said_verdict(found, *, as_json: bool) -> None:
+    if as_json:
+        _dump(found.model_dump(mode="json"))
+        return
+    said = _said(found.action, found.rule)
+    said.append(f"  -  {found.why}", style=theme.BONE_DIM)
+    console.print(said)
+    _passed_over(found.passed_over)
+
+
+def _check_the_fleet(
+    url: str | None, token: str | None, asked: firewall.Asked, *, as_json: bool
+) -> None:
+    """One line a node, which is how the one machine that answers differently is found."""
+    found = _asking(
+        url,
+        token,
+        lambda client: client.fleet_firewall_check(
+            asked.address,
+            asked.port,
+            protocol=asked.protocol.value,
+            direction=asked.direction.value,
+        ),
+    )
+    if as_json:
+        _dump(found.model_dump(mode="json"))
+        return
+
+    table = Table(box=None, pad_edge=False, header_style=f"bold {theme.BONE_DIM}")
+    for column in ("NODE", "ANSWER", "BECAUSE"):
+        table.add_column(column, overflow="fold" if column == "BECAUSE" else None)
+    for one in found.verdicts:
+        table.add_row(
+            Text(one.node, style=theme.AMETHYST),
+            _said(one.action, one.rule),
+            one.why,
+        )
+    console.print(table)
+    _missing(found.unreachable)
 
 
 @firewall_app.command("status")
