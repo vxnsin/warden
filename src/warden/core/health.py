@@ -8,16 +8,35 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 import httpx
 
 from warden import __version__, theme
-from warden.client import WardenClient
 from warden.core import installed
 from warden.core.config import Settings, config_file, insecure
 from warden.errors import NotPermittedError, WardenError
-from warden.models import Health
+from warden.models import Health, Node, PoolStatus, Registration, UpdateStatus, WebhookStatus
 from warden.ports.listeners import GONE
+
+
+class Reads(Protocol):
+    """The handful of reads every check here is made of.
+
+    A person running `warden doctor` gets them over HTTP through
+    `WardenClient`; a warden asked about itself answers them from inside, so
+    the checks are the same ones either way.
+    """
+
+    url: str
+
+    def health(self) -> Health: ...
+    def pool(self) -> PoolStatus: ...
+    def services(self, *, holders: bool = False) -> list[Registration]: ...
+    def nodes(self) -> list[Node]: ...
+    def webhook(self) -> WebhookStatus: ...
+    def update_status(self) -> UpdateStatus: ...
+
 
 OK = "ok"
 NOTE = "note"
@@ -53,7 +72,27 @@ def exit_code(checks: list[Check]) -> int:
     return 1 if any(check.level == FAIL for check in checks) else 0
 
 
-def _answering(client: WardenClient) -> tuple[list[Check], Health | None]:
+LOUDEST = (OK, NOTE, WARN, FAIL)
+
+
+def worst(checks: list[Check]) -> str:
+    """The loudest level anything said, which is what a fleet has room for."""
+    return max((check.level for check in checks), key=LOUDEST.index, default=OK)
+
+
+def says(checks: list[Check]) -> str:
+    """The first thing said at that level - usually the cause of the rest.
+
+    A machine with nothing to report says nothing rather than repeating that it
+    is answering, so a fleet of forty reads as the few lines that are not `ok`.
+    """
+    loudest = worst(checks)
+    if loudest == OK:
+        return "-"
+    return next((check.text for check in checks if check.level == loudest), "-")
+
+
+def _answering(client: Reads) -> tuple[list[Check], Health | None]:
     try:
         health = client.health()
     except WardenError as exc:
@@ -114,7 +153,7 @@ def _upstream(settings: Settings) -> list[Check]:
     return [Check(OK, f"reporting to {settings.upstream} as {settings.node}")]
 
 
-def _pool(client: WardenClient) -> list[Check]:
+def _pool(client: Reads) -> list[Check]:
     try:
         pool = client.pool()
     except WardenError as exc:
@@ -128,7 +167,7 @@ def _pool(client: WardenClient) -> list[Check]:
     return [Check(OK, summary)]
 
 
-def _holders(client: WardenClient) -> list[Check]:
+def _holders(client: Reads) -> list[Check]:
     try:
         services = client.services(holders=True)
     except NotPermittedError:
@@ -153,7 +192,7 @@ def _holders(client: WardenClient) -> list[Check]:
     return [Check(OK, f"{_many(len(services), 'registration')}, every holder still there")]
 
 
-def _without_holders(client: WardenClient) -> list[Check]:
+def _without_holders(client: Reads) -> list[Check]:
     try:
         services = client.services()
     except WardenError as exc:
@@ -167,7 +206,7 @@ def _without_holders(client: WardenClient) -> list[Check]:
     ]
 
 
-def _nodes(client: WardenClient, health: Health) -> list[Check]:
+def _nodes(client: Reads, health: Health) -> list[Check]:
     if not health.nodes:
         return []
     try:
@@ -183,7 +222,7 @@ def _nodes(client: WardenClient, health: Health) -> list[Check]:
     ]
 
 
-def _webhook(client: WardenClient) -> list[Check]:
+def _webhook(client: Reads) -> list[Check]:
     """Whether events are going anywhere, and whether they arrive.
 
     A webhook that has been failing all day looks, from inside warden, exactly
@@ -339,7 +378,7 @@ def _who_may_change_it(settings: Settings) -> list[Check]:
     return [Check(NOTE, "the firewall can be changed over the API by a token holder")]
 
 
-def _updates(client: WardenClient) -> list[Check]:
+def _updates(client: Reads) -> list[Check]:
     try:
         status = client.update_status()
     except WardenError as exc:
@@ -369,7 +408,7 @@ def _wrong_name() -> list[Check]:
     return [Check(WARN, f"{found.note} - `{found.command}`")] if found.wrong else []
 
 
-def examine(client: WardenClient, settings: Settings) -> list[Check]:
+def examine(client: Reads, settings: Settings) -> list[Check]:
     """Everything worth knowing about this warden, in the order it matters."""
     checks, health = _answering(client)
     checks.extend(_settings(settings))

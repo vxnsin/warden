@@ -297,6 +297,25 @@ ok    events to https://discord.com/... as discord, 12 delivered
 One command instead of four and a guess. It exits non-zero only on `fail`, so a
 warning about an unset token does not make a health check call the machine down.
 
+**And for a fleet, `--all`** — each node examines itself, because half of what
+this reads (its settings, its firewall, whether it can reach the hub) only
+exists on the machine it is about:
+
+```sh
+$ warden doctor --all
+NODE      WORST  SAYS
+build-01  warn   3 rules changed since the last apply
+db-03     fail   could not be reached - connection refused
+hub       ok     -
+web-02    note   a newer warden exists
+
+1 failing, 1 warning, of 4
+```
+
+A node nobody could reach is a `fail` line rather than a missing one.
+`--verbose` prints every line each node had, which is what you want at four
+machines rather than at forty.
+
 ## Set it up once
 
 ```sh
