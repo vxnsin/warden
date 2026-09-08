@@ -124,8 +124,8 @@ $ warden events
 09:41:44  released     shop-api  127.0.0.1:8600
 ```
 
-`warden events --known` lists everything it can tell you about: thirteen things
-in three scopes, from a port changing hands to a node going quiet to a firewall
+`warden events --known` lists everything it can tell you about: fifteen things
+in four scopes, from a port changing hands to a node going quiet to a firewall
 rolling itself back. `GET /v1/events` is the same stream as server-sent events.
 A webhook sends them somewhere else — `discord`, `slack` and `teams` post something the chat window
 renders, and `json` posts the event as it is, signed with an HMAC over exactly
@@ -136,7 +136,21 @@ committed, off the request path, and `warden doctor` says when the last one did
 not arrive — because from the inside, a webhook failing all day looks exactly
 like a quiet day.
 
-Each of the thirteen carries a colour, an icon and a line of words, and `warden
+**It also says when something is wrong**, rather than waiting to be asked. The
+same checks `warden doctor` runs happen on a timer inside `warden serve`, and a
+finding that changes state is an event like any other:
+
+```
+health.worsened   firewall  3 rules changed since the last apply
+health.recovered  firewall  nothing since the last apply
+```
+
+On change only — a channel told every ten minutes that three rules are still
+unapplied is a channel people mute within the week. The first look after a
+start is quiet, because what a machine was already like is not news.
+`health_watch = false` turns it off.
+
+Each of the fifteen carries a colour, an icon and a line of words, and `warden
 settings embed` changes them one event at a time against a preview of the
 message it would send — the rest keep what they came with:
 

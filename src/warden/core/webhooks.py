@@ -93,6 +93,10 @@ LOOKS: dict[str, Look] = {
         BAD,
     ),
     "firewall.restored": Look(0x6E6E6E, "snapshot restored", "\N{PACKAGE}"),
+    "health.worsened": Look(0xC8892A, "is not right", "\N{WARNING SIGN}", WARN),
+    "health.recovered": Look(
+        0x4C9A5B, "is well again", "\N{WHITE HEAVY CHECK MARK}", GOOD
+    ),
 }
 
 PLAIN = Look(0x6E6E6E, "happened")

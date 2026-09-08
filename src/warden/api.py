@@ -29,6 +29,7 @@ from warden.core.config import Grant, Settings
 from warden.core.events import EventBus
 from warden.core.health import examine, says, worst
 from warden.core.here import Here
+from warden.core.rounds import Rounds
 from warden.core.store import RuleStore, Snapshots, Store
 from warden.errors import NotPermittedError, WardenError
 from warden.firewall import catalogue, guard, link
@@ -149,9 +150,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         watcher = updates.UpdateWatcher(settings)
         watcher.start()
         app.state.updates = watcher
+        # The same checks `warden doctor` runs, on a timer, announcing a
+        # finding when it changes. The whole point of an event stream is not
+        # having to ask, and until now warden only ever said what happened to a
+        # port - never that something was wrong.
+        here = Here(settings, app.state.manager, app.state.fleet, bus, watcher)
+        rounds = Rounds(settings, store, here)
+        rounds.start()
+        app.state.rounds = rounds
         try:
             yield
         finally:
+            await rounds.stop()
             await watcher.stop()
             await reporter.stop()
             await bus.stop()

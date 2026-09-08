@@ -61,6 +61,13 @@ def _many(count: int, word: str) -> str:
 class Check:
     level: str
     text: str
+    # Which check said it, so something watching this can tell one finding
+    # changing from another one appearing. Empty where nobody asked.
+    about: str = ""
+
+
+def _about(name: str, checks: list[Check]) -> list[Check]:
+    return [Check(check.level, check.text, name) for check in checks]
 
 
 def exit_code(checks: list[Check]) -> int:
@@ -204,6 +211,17 @@ def _without_holders(client: Reads) -> list[Check]:
             "system will not list sockets without root",
         )
     ]
+
+
+def _counted(client: Reads) -> list[Check]:
+    """How many are registered, without asking the machine who holds them."""
+    try:
+        services = client.services()
+    except WardenError as exc:
+        return [Check(FAIL, f"cannot list services - {exc.message}")]
+    if not services:
+        return [Check(OK, "nothing registered")]
+    return [Check(OK, _many(len(services), "registration"))]
 
 
 def _nodes(client: Reads, health: Health) -> list[Check]:
@@ -408,17 +426,25 @@ def _wrong_name() -> list[Check]:
     return [Check(WARN, f"{found.note} - `{found.command}`")] if found.wrong else []
 
 
-def examine(client: Reads, settings: Settings) -> list[Check]:
-    """Everything worth knowing about this warden, in the order it matters."""
+def examine(client: Reads, settings: Settings, *, sweeping: bool = True) -> list[Check]:
+    """Everything worth knowing about this warden, in the order it matters.
+
+    `sweeping` off leaves the machine's sockets alone, which is what something
+    running this on a timer wants: walking every socket every ten minutes to
+    say the same thing is a cost `/metrics` already refuses to pay.
+    """
     checks, health = _answering(client)
-    checks.extend(_settings(settings))
+    checks = _about("answering", checks)
+    checks.extend(_about("settings", _settings(settings)))
     if health is None:
         return checks
-    checks.extend(_upstream(settings))
-    checks.extend(_pool(client))
-    checks.extend(_holders(client))
-    checks.extend(_webhook(client))
-    checks.extend(_firewall(settings))
-    checks.extend(_nodes(client, health))
-    checks.extend(_updates(client))
+    checks.extend(_about("upstream", _upstream(settings)))
+    checks.extend(_about("pool", _pool(client)))
+    checks.extend(
+        _about("services", _holders(client) if sweeping else _counted(client))
+    )
+    checks.extend(_about("webhook", _webhook(client)))
+    checks.extend(_about("firewall", _firewall(settings)))
+    checks.extend(_about("nodes", _nodes(client, health)))
+    checks.extend(_about("updates", _updates(client)))
     return checks

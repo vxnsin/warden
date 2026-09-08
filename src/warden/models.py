@@ -205,8 +205,9 @@ class Node(BaseModel):
 PORT = "port"
 NODE = "node"
 FIREWALL = "firewall"
+HEALTH = "health"
 
-SCOPES = (PORT, NODE, FIREWALL)
+SCOPES = (PORT, NODE, FIREWALL, HEALTH)
 
 
 class Event(BaseModel):
