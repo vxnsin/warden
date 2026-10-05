@@ -8,24 +8,34 @@ on:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    # The whole suite takes five minutes. Twice, on 2026-09-07 and -08, a
+    # Windows run sat at one wizard test for the six hours GitHub allows, with
+    # every test before it green. A hang that is not cut off reports nothing.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.12", "3.13"]
+    env:
+      # `.python-version` says 3.12, and `uv run` obeys it over whatever `uv
+      # sync --python` built: it threw the 3.13 environment away and tested
+      # 3.12 nine times. The variable outranks the file, for sync and run alike.
+      UV_PYTHON: ${{ matrix.python }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
-      - run: uv sync --all-groups --python ${{ matrix.python }}
+      - run: uv sync --all-groups
       - run: uv run ruff check .
       - run: uv run pytest
 
   firewall:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Its own network namespace and NET_ADMIN: a `policy drop` in here cannot
       # reach the runner that has to report the result.
@@ -42,8 +52,9 @@ jobs:
 
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Tokens that live as long as this run
         run: |

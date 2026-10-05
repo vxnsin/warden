@@ -116,6 +116,14 @@ before anything is written.
 [Projects](https://github.com/vxnsin/warden/wiki/Projects) has the whole file
 format.
 
+A project that carries the file can say so, where the other badges are:
+
+<img src="https://raw.githubusercontent.com/vxnsin/warden/main/assets/supports-warden.svg" alt="supports warden" height="20">
+
+```markdown
+[![supports warden](https://raw.githubusercontent.com/vxnsin/warden/main/assets/supports-warden.svg)](https://github.com/vxnsin/warden)
+```
+
 ### Hear about it while it happens
 
 ```sh

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 20" width="150" height="20" role="img" aria-labelledby="title">
+  <title id="title">supports warden</title>
+  <clipPath id="r"><rect width="150" height="20" rx="3"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="64" height="20" fill="#0e1a1c"/>
+    <rect x="64" width="86" height="20" fill="#1e3538"/>
+  </g>
+  <text x="32" y="14" textLength="50" lengthAdjust="spacingAndGlyphs" text-anchor="middle" font-family="Verdana, Geneva, DejaVu Sans, sans-serif" font-size="11" fill="#d9e4e2">supports</text>
+  <g transform="translate(70 3) scale(0.22)">
+    <path d="M26 19 L19 10 M38 19 L45 10" stroke="#17847f" stroke-width="4.5" stroke-linecap="round"/>
+    <rect x="25" y="16" width="14" height="12" rx="3" fill="#17847f"/>
+    <rect x="16" y="31" width="32" height="21" rx="5" fill="#17847f"/>
+    <circle cx="32" cy="41" r="5" fill="#2be0d6"/>
+  </g>
+  <text x="89" y="14" textLength="52" lengthAdjust="spacingAndGlyphs" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#2be0d6" letter-spacing="-0.3">warden</text>
+</svg>

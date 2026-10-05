@@ -66,6 +66,12 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "sockets: needs this machine to list the sockets open on it"
     )
+    # Textual reads this once, when it is first imported - at collection, which
+    # is after this runs. A pressed key waits, with no timeout, for every
+    # animation to finish, and switching tabs starts one twenty milliseconds
+    # after the fact. Twice on Windows a ctrl+q pressed right after a refusal
+    # that switched tabs never came back. Nothing here tests motion.
+    os.environ.setdefault("TEXTUAL_ANIMATIONS", "none")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

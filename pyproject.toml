@@ -64,3 +64,8 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# No test here takes longer than a few seconds. One still running after five
+# minutes has hung, and this prints every thread's stack while it still can.
+# The Windows runs of 2026-09-07 and -08 sat for six hours and said only which
+# test it was.
+faulthandler_timeout = 300
