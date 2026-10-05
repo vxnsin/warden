@@ -29,7 +29,7 @@ jobs:
           # The steps below run code out of the repository, which has no
           # business holding a token that can write back to it.
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - run: uv sync --all-groups
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
       # A version number on PyPI can never be reused, so a tag that disagrees
       # with pyproject.toml has to stop here rather than upload the wrong one.
       - name: Check the tag against the version
